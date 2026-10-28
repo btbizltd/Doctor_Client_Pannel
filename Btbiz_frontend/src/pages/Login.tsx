@@ -8,25 +8,29 @@ import { PageHeader } from '../components/ui/PageHeader'
 import { TextField } from '../components/ui/TextField'
 import { CountryCodePhoneInput } from '../components/CountryCodePhoneInput'
 import { LoginHomeLink } from '../components/LoginHomeLink'
-
-/** Must match backend default SUPER_ADMIN_EMAIL in Btbiz_backend/.env */
-const SUPER_ADMIN_EMAIL = 'superadmin@medigraph.com'
+import { LOGIN_PORTALS, parseLoginPortal } from '../utils/loginPortal'
 
 export const Login = () => {
   const navigate = useNavigate()
-  const [searchParams] = useSearchParams()
+  const [searchParams, setSearchParams] = useSearchParams()
 
   useEffect(() => {
     authStorage.clear()
   }, [])
-  const isSuperAdminLogin = searchParams.get('role') === 'super-admin'
+  const portal = parseLoginPortal(searchParams.get('role'))
+  const useSuperAdminFlow = portal === 'super-admin'
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
-  const isSuperAdminEmail =
-    email.trim().toLowerCase() === SUPER_ADMIN_EMAIL.toLowerCase()
-  const useSuperAdminFlow = isSuperAdminLogin || isSuperAdminEmail
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [portalError, setPortalError] = useState<string | null>(null)
+
+  const handlePortalChange = (value: string) => {
+    const next = parseLoginPortal(value)
+    setPortalError(null)
+    setError(null)
+    setSearchParams(next ? { role: next } : {}, { replace: true })
+  }
 
   const [showForgot, setShowForgot] = useState(false)
   const [forgotStep, setForgotStep] = useState<'phone' | 'otp'>('phone')
@@ -42,6 +46,11 @@ export const Login = () => {
     e.preventDefault()
     setError(null)
 
+    if (!portal) {
+      setPortalError('Please select your login type.')
+      document.getElementById('login-portal')?.focus()
+      return
+    }
     if (!email || !password) {
       setError('Please enter both email and password.')
       return
@@ -49,9 +58,9 @@ export const Login = () => {
 
     try {
       setLoading(true)
-      const result = useSuperAdminFlow
+      const result = portal === 'super-admin'
         ? await authService.superAdminLogin({ email, password })
-        : await authService.login({ email, password })
+        : await authService.login({ email, password, portal })
       authStorage.set(result.token, result.doctorName, result.role)
       if (result.role === 'ASSISTANT') {
         navigate('/assistant')
@@ -175,6 +184,31 @@ export const Login = () => {
 
             <form onSubmit={handleSubmit} className="login-form">
               <div className="login-form-fields">
+                <div className={`ui-textfield${portalError ? ' ui-textfield--error' : ''}`}>
+                  <label htmlFor="login-portal" className="ui-textfield-label">
+                    Login as *
+                  </label>
+                  <div className="ui-textfield-input-wrapper">
+                    <select
+                      id="login-portal"
+                      className="ui-textfield-input"
+                      value={portal ?? ''}
+                      onChange={(e) => handlePortalChange(e.target.value)}
+                      aria-invalid={portalError ? true : undefined}
+                      aria-describedby={portalError ? 'login-portal-hint' : undefined}
+                    >
+                      <option value="">Select login type</option>
+                      {LOGIN_PORTALS.map((p) => (
+                        <option key={p.id} value={p.id}>{p.label}</option>
+                      ))}
+                    </select>
+                  </div>
+                  {portalError && (
+                    <p id="login-portal-hint" className="ui-textfield-hint ui-textfield-hint--error">
+                      {portalError}
+                    </p>
+                  )}
+                </div>
                 <TextField
                   id="email"
                   type="email"

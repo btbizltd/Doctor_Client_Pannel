@@ -3,6 +3,7 @@ import { useLocation, useNavigate } from 'react-router-dom'
 
 import { Button } from './ui/Button'
 import { authStorage } from '../utils/authStorage'
+import { loginPathForRole } from '../utils/loginPortal'
 import { patientStorage } from '../utils/patientStorage'
 import { getJwtExpiryMs, sessionExpiry, type SessionKind } from '../utils/sessionExpiry'
 
@@ -79,9 +80,7 @@ export const SessionExpiredDialog = () => {
     const target =
       expired.kind === 'patient'
         ? '/patient-login'
-        : expired.role === 'SUPER_ADMIN'
-          ? '/login?role=super-admin'
-          : '/login'
+        : loginPathForRole(expired.role)
     setExpired(null)
     sessionExpiry.reset()
     navigate(target, { replace: true })

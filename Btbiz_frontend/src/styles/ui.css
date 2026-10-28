@@ -4569,6 +4569,21 @@ body {
   gap: 6px;
 }
 
+.patient-profile-page div.patient-profile-select-field--error label {
+  color: #b91c1c;
+}
+
+.patient-profile-page .patient-profile-select-field--error select {
+  border-color: #ef4444;
+  background-color: #fffbfb;
+}
+
+.patient-profile-page .patient-profile-field-error {
+  margin: 0;
+  font-size: 0.85rem;
+  color: #b91c1c;
+}
+
 .patient-profile-page .patient-profile-lab-select-field label,
 .patient-profile-page .patient-profile-medicine-select-field label {
   font-size: 0.9rem;
@@ -5543,6 +5558,7 @@ body {
 }
 
 .book-appointment-member-meta {
+  flex: 1 1 220px;
   min-width: 0;
 }
 
@@ -5560,10 +5576,12 @@ body {
 .book-appointment-member-details {
   font-size: 0.85rem;
   color: var(--text-muted, #64748b);
+  overflow-wrap: anywhere;
 }
 
 .book-appointment-member-actions {
   display: flex;
+  flex: 0 0 auto;
   flex-wrap: wrap;
   gap: 6px;
 }

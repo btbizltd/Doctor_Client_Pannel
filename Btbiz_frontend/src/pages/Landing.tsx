@@ -22,7 +22,7 @@ const roles: LandingRole[] = [
   {
     title: 'Doctor',
     description: 'Manage patients, prescriptions and view diagnostic reports.',
-    path: '/login',
+    path: '/login?role=doctor',
     cta: 'Login as doctor',
     registerPath: '/register',
     registerHint: 'Self-registration requires Super Admin approval before account activation.',
@@ -31,16 +31,16 @@ const roles: LandingRole[] = [
     title: 'Lab Manager',
     description:
       'Run your lab: patient search, tests, and orders.',
-    path: '/login',
+    path: '/login?role=lab-manager',
     cta: 'Login as lab manager',
     registerPath: '/register-lab-manager',
   },
-  { title: 'Assistant / Lab', description: 'Check-in patients, upload documents, or record lab tests.', path: '/login', cta: 'Login as assistant / lab', registerPath: null },
+  { title: 'Assistant / Lab', description: 'Check-in patients, upload documents, or record lab tests.', path: '/login?role=assistant-lab', cta: 'Login as assistant / lab', registerPath: null },
   {
     title: 'Pharmacy',
     description:
       'Dispense medicines, search patients by mobile, and manage orders.',
-    path: '/login',
+    path: '/login?role=pharmacy',
     cta: 'Login as medicine',
     registerPath: '/register-medicine',
   },

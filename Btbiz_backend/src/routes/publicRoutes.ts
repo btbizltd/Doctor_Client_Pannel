@@ -23,6 +23,7 @@ import { PatientMedicineRequest } from "../models/PatientMedicineRequest";
 import { env } from "../config/env";
 import { getPublicBaseUrl } from "../config/publicBaseUrl";
 import { completedAgeYears } from "../utils/age";
+import { findDuplicateFamilyMember } from "../utils/familyMember";
 import { getDailyAppointmentQuotaSnapshot } from "../utils/appointmentQuota";
 import { getDoctorSlotsForDate, isSlotStillAvailable } from "../utils/doctorSlots";
 import { parseBookingSource } from "../utils/bookingSource";
@@ -865,6 +866,35 @@ router.post("/family/members", async (req, res) => {
           },
           alreadyExists: true,
           message: "Primary (SELF) profile already exists for this family account."
+        });
+        return;
+      }
+    }
+
+    // A repeated submit of the same person (same name + relation, and same DOB when both have one)
+    // must not create another member/Patient row.
+    if (relationNorm !== "SELF") {
+      const activeSameRelation = await FamilyMember.find({
+        account: (account as any)._id,
+        relation: relationNorm,
+        isDeleted: { $ne: true }
+      }).lean();
+      const duplicate = findDuplicateFamilyMember(activeSameRelation as any[], {
+        fullName: body.fullName,
+        dateOfBirth: body.dateOfBirth ? new Date(body.dateOfBirth) : undefined
+      });
+      if (duplicate) {
+        res.status(200).json({
+          member: {
+            id: (duplicate as any)._id.toString(),
+            fullName: (duplicate as any).fullName,
+            relation: (duplicate as any).relation,
+            gender: (duplicate as any).gender,
+            dateOfBirth: (duplicate as any).dateOfBirth,
+            patientId: (duplicate as any).patient.toString()
+          },
+          alreadyExists: true,
+          message: "This family member already exists."
         });
         return;
       }

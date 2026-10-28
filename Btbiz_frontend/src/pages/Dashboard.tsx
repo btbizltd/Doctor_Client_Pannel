@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Header } from '../components/Header'
 import { AppLayout } from '../components/layout/AppLayout'
-import { Breadcrumb } from '../components/ui/Breadcrumb'
 import { EmptyState } from '../components/ui/EmptyState'
 import { BellIcon, CalendarIcon, UserIcon } from '../components/ui/icons'
 import { Card } from '../components/ui/Card'
@@ -319,14 +318,6 @@ export const Dashboard = () => {
               setCError(null)
               setCSuccess(null)
             }}
-          />
-        )}
-        breadcrumb={(
-          <Breadcrumb
-            items={[
-              { label: 'Home', href: '/' },
-              { label: 'Doctor Dashboard' },
-            ]}
           />
         )}
       >

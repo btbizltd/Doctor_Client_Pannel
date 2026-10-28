@@ -95,8 +95,35 @@ async function restoreMissingFamilyPatients(mobile: string): Promise<void> {
   }
 }
 
+/**
+ * Patient ids that belong only to removed (soft-deleted) family members.
+ * A patient still linked to an active member is never treated as removed.
+ */
+export const getRemovedFamilyPatientIds = (
+  members: Array<{ patient?: unknown; isDeleted?: unknown }>
+): Set<string> => {
+  const active = new Set<string>();
+  const removed = new Set<string>();
+  for (const member of members) {
+    if (!member.patient) continue;
+    const id = String(member.patient);
+    if (member.isDeleted === true) removed.add(id);
+    else active.add(id);
+  }
+  for (const id of active) removed.delete(id);
+  return removed;
+};
+
+export interface FindPatientsByMobileOptions {
+  /** Hide patients whose only family link was removed (staff search shows the current family only). */
+  excludeRemovedFamilyMembers?: boolean;
+}
+
 /** Returns all patients with the given mobile, including family profiles on that number. */
-export const findPatientsByMobile = async (mobile: string) => {
+export const findPatientsByMobile = async (
+  mobile: string,
+  options: FindPatientsByMobileOptions = {}
+) => {
   await restoreMissingFamilyPatients(mobile);
   const candidates = getMobileCandidates(mobile);
   const accounts = await FamilyAccount.collection
@@ -104,25 +131,32 @@ export const findPatientsByMobile = async (mobile: string) => {
     .project({ _id: 1 })
     .toArray();
   const accountIds = accounts.map((account) => account._id);
-  const members =
+  const allMembers =
     accountIds.length > 0
       ? await FamilyMember.collection
-          .find({ account: { $in: accountIds }, isDeleted: { $ne: true } })
-          .project({ patient: 1 })
+          .find({ account: { $in: accountIds } })
+          .project({ patient: 1, isDeleted: 1 })
           .toArray()
       : [];
-  const linkedPatientIds = members.map((member) => member.patient).filter(Boolean);
+  const linkedPatientIds = allMembers
+    .filter((member) => member.isDeleted !== true)
+    .map((member) => member.patient)
+    .filter(Boolean);
 
   const orFilters: Record<string, unknown>[] = [];
   if (candidates.length > 0) orFilters.push({ mobileNumber: { $in: candidates } });
   if (linkedPatientIds.length > 0) orFilters.push({ _id: { $in: linkedPatientIds } });
   if (orFilters.length === 0) return [];
 
-  return Patient.find({ $or: orFilters })
+  const patients = await Patient.find({ $or: orFilters })
     .setOptions({ skipTenant: true })
     .select("_id firstName lastName mobileNumber gender dateOfBirth address")
     .sort({ createdAt: 1 })
     .lean();
+
+  if (!options.excludeRemovedFamilyMembers) return patients;
+  const removedIds = getRemovedFamilyPatientIds(allMembers);
+  return patients.filter((patient) => !removedIds.has(patient._id.toString()));
 };
 
 export interface CreatePatientPayload {
@@ -172,6 +206,8 @@ export interface CreateVisitPayload {
   patientId: string;
   doctorId: string;
   recordedById?: string;
+  /** Set when an assistant registers the patient at the desk (walk-in), so it counts as checked in. */
+  assistantCheckedInAt?: Date;
   visitDate?: Date;
   reason?: string;
   notes?: string;
@@ -213,6 +249,7 @@ export const createVisit = async (payload: CreateVisitPayload) => {
     recordedBy: payload.recordedById
       ? new mongoose.Types.ObjectId(payload.recordedById)
       : undefined,
+    assistantCheckedInAt: payload.assistantCheckedInAt,
     visitDate,
     reason: payload.reason,
     notes: payload.notes,

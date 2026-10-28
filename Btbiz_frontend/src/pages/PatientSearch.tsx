@@ -2,7 +2,6 @@ import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Header } from '../components/Header'
 import { AppLayout } from '../components/layout/AppLayout'
-import { Breadcrumb } from '../components/ui/Breadcrumb'
 import { authStorage } from '../utils/authStorage'
 import { Card } from '../components/ui/Card'
 import { Button } from '../components/ui/Button'
@@ -52,14 +51,6 @@ export const PatientSearch = () => {
     <AppLayout
       showSidebar
       header={<Header doctorName={doctorName} />}
-      breadcrumb={(
-        <Breadcrumb
-          items={[
-            { label: 'Home', href: '/' },
-            { label: 'Search Patients' },
-          ]}
-        />
-      )}
     >
       <main className="search-main patient-search-main">
         <section className="patient-search-section">

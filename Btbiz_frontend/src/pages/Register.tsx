@@ -60,7 +60,7 @@ export const Register = () => {
       )
 
       setTimeout(() => {
-        navigate('/login')
+        navigate('/login?role=doctor')
       }, photoNote ? 2500 : 800)
     } catch (err) {
       // eslint-disable-next-line no-console
@@ -168,7 +168,7 @@ export const Register = () => {
               <button
                 type="button"
                 className="login-link"
-                onClick={() => navigate('/login')}
+                onClick={() => navigate('/login?role=doctor')}
               >
                 Back to login
               </button>

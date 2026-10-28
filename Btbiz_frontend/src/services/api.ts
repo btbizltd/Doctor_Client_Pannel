@@ -3,6 +3,7 @@ import { toast } from 'react-toastify'
 import { authStorage } from '../utils/authStorage'
 import { patientStorage } from '../utils/patientStorage'
 import { isSessionExpiry401, sessionExpiry, type SessionKind } from '../utils/sessionExpiry'
+import type { StaffLoginPortal } from '../utils/loginPortal'
 
 export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || ''
 
@@ -112,6 +113,8 @@ function openBlobInBrowser(
 export interface DoctorLoginPayload {
   email: string
   password: string
+  /** Chosen login option; the backend rejects accounts whose role belongs to another option. */
+  portal?: StaffLoginPortal
 }
 
 export type DoctorRole = 'DOCTOR' | 'ASSISTANT' | 'LAB_ASSISTANT' | 'LAB_MANAGER' | 'PHARMACY' | 'SUPER_ADMIN'
@@ -254,9 +257,12 @@ export interface SuperAdminTenant {
   slug: string
   status: string
   phone?: string
+  address?: TenantAddressPayload
   ownerUserId?: string
   ownerEmail?: string
   ownerName?: string
+  /** True when the owner has a map pin (patients see km distance). */
+  locationSet?: boolean
   createdAt: string
 }
 
@@ -265,6 +271,8 @@ export interface TenantAddressPayload {
   city?: string
   state?: string
   pincode?: string
+  /** Google Maps link; when set, the shop's map pin is taken from it. */
+  mapUrl?: string
 }
 
 export interface CreateSuperAdminTenantPayload {
@@ -1465,23 +1473,42 @@ export const patientService = {
           ? new Date(payload.document.uploadedAt).toLocaleString('en-IN')
           : '—'
 
+        const isVerified = payload.document.source === 'VERIFIED_ASSISTANT'
         const renderRows = (rows: Array<{ text: string; confidence: 'HIGH' | 'MEDIUM' | 'LOW' }> | undefined) =>
           (rows ?? [])
             .map((r) => {
               const color =
                 r.confidence === 'HIGH' ? '#166534' : r.confidence === 'MEDIUM' ? '#92400e' : '#991b1b'
+              const badge = isVerified
+                ? ''
+                : `<small style="margin-left:8px;color:${color};font-weight:600;">${escapeHtml(r.confidence)}</small>`
               return `<li style="margin:0 0 6px;">
-                <span>${escapeHtml(r.text)}</span>
-                <small style="margin-left:8px;color:${color};font-weight:600;">${escapeHtml(r.confidence)}</small>
+                <span>${escapeHtml(r.text)}</span>${badge}
               </li>`
             })
             .join('')
 
-        const medicinesHtml = renderRows(payload.document.parsed?.medicines)
-        const testsHtml = renderRows(payload.document.parsed?.tests)
+        const isPharmacyView = payload.document.roleView === 'PHARMACY_MEDICINES_ONLY'
+        const sectionTitle = isPharmacyView ? 'Medicines' : 'Tests'
+        const sectionRowsHtml = renderRows(
+          isPharmacyView ? payload.document.parsed?.medicines : payload.document.parsed?.tests
+        )
+        const sectionEmpty = isPharmacyView
+          ? 'No medicines found on this prescription.'
+          : 'No tests found on this prescription.'
         const lowLines = (payload.document.lowConfidenceLines ?? [])
           .map((l) => `<li style="margin:0 0 4px;color:#991b1b;">${escapeHtml(l)}</li>`)
           .join('')
+        const unverifiedHtml = isVerified
+          ? ''
+          : `<section style="background:#fff;border:1px solid #e2e8f0;border-radius:8px;padding:10px;margin-bottom:10px;">
+                <h3 style="margin:0 0 8px;font-size:13px;">Low-confidence lines (verify manually)</h3>
+                <ul style="margin:0;padding-left:16px;font-size:12px;line-height:1.4;">
+                  ${lowLines || '<li style="color:#64748b;">No low-confidence lines.</li>'}
+                </ul>
+              </section>
+              <h3 style="margin:0 0 8px;font-size:13px;">Raw OCR (not verified)</h3>
+              <pre style="white-space:pre-wrap;word-break:break-word;font-size:13px;line-height:1.5;background:#fff;border:1px solid #e2e8f0;border-radius:8px;padding:12px;">${escapeHtml(payload.document.previewText || '')}</pre>`
 
         win.document.open()
         win.document.write(`
@@ -1494,36 +1521,19 @@ export const patientService = {
               ${assistantVerifiedStrip}
               <h2 style="margin:0 0 8px;">Secure prescription preview</h2>
               <p style="margin:0 0 4px;font-size:13px;color:#475569;"><strong>File:</strong> ${escapeHtml(payload.document.originalName || 'Prescription')}</p>
-              <p style="margin:0 0 12px;font-size:13px;color:#475569;"><strong>Uploaded:</strong> ${escapeHtml(uploaded)} · <strong>Scope:</strong> ${escapeHtml(payload.document.scope || 'OCR_ONLY')}</p>
-              <p style="margin:0 0 8px;font-size:12px;color:#b45309;background:#fffbeb;border:1px solid #fcd34d;border-radius:8px;padding:8px 10px;">
-                Download is disabled for this role. Only limited preview is shown.
+              <p style="margin:0 0 12px;font-size:13px;color:#475569;"><strong>Uploaded:</strong> ${escapeHtml(uploaded)}</p>
+              <p style="margin:0 0 10px;font-size:12px;color:#b45309;background:#fffbeb;border:1px solid #fcd34d;border-radius:8px;padding:8px 10px;">
+                Download is disabled. Only the ${isPharmacyView ? 'medicines' : 'tests'} on this prescription are shown.
               </p>
-              <p style="margin:0 0 10px;font-size:12px;color:#334155;"><strong>Role filter:</strong> ${escapeHtml(payload.document.roleView || 'ROLE_FILTERED')}</p>
 
-              <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;">
-                <section style="background:#fff;border:1px solid #e2e8f0;border-radius:8px;padding:10px;">
-                  <h3 style="margin:0 0 8px;font-size:13px;">Parsed medicines (pharmacy view)</h3>
-                  <ul style="margin:0;padding-left:16px;font-size:12px;line-height:1.45;">
-                    ${medicinesHtml || '<li style="color:#64748b;">No medicine lines available for this role.</li>'}
-                  </ul>
-                </section>
-                <section style="background:#fff;border:1px solid #e2e8f0;border-radius:8px;padding:10px;">
-                  <h3 style="margin:0 0 8px;font-size:13px;">Parsed tests (lab view)</h3>
-                  <ul style="margin:0;padding-left:16px;font-size:12px;line-height:1.45;">
-                    ${testsHtml || '<li style="color:#64748b;">No test lines available for this role.</li>'}
-                  </ul>
-                </section>
-              </div>
-
-              <section style="background:#fff;border:1px solid #e2e8f0;border-radius:8px;padding:10px;margin-bottom:10px;">
-                <h3 style="margin:0 0 8px;font-size:13px;">Low-confidence lines (verify manually)</h3>
-                <ul style="margin:0;padding-left:16px;font-size:12px;line-height:1.4;">
-                  ${lowLines || '<li style="color:#64748b;">No low-confidence lines.</li>'}
+              <section style="background:#fff;border:1px solid #e2e8f0;border-radius:8px;padding:12px;margin-bottom:10px;">
+                <h3 style="margin:0 0 8px;font-size:14px;">${sectionTitle}</h3>
+                <ul style="margin:0;padding-left:18px;font-size:14px;line-height:1.5;">
+                  ${sectionRowsHtml || `<li style="color:#64748b;">${sectionEmpty}</li>`}
                 </ul>
               </section>
 
-              <h3 style="margin:0 0 8px;font-size:13px;">Raw OCR</h3>
-              <pre style="white-space:pre-wrap;word-break:break-word;font-size:13px;line-height:1.5;background:#fff;border:1px solid #e2e8f0;border-radius:8px;padding:12px;">${escapeHtml(payload.document.previewText || '')}</pre>
+              ${unverifiedHtml}
             </body>
           </html>
         `)

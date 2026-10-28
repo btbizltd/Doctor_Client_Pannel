@@ -5,10 +5,19 @@ import mongoose from "mongoose";
 import { Doctor, type DoctorRole, type IDoctor } from "../models/Doctor";
 import { env } from "../config/env";
 import { sendOtpToWhatsapp } from "./whatsappService";
+import { portalAllowsRole, portalLabelForRole, type LoginPortal } from "../utils/loginPortal";
 
 export interface LoginPayload {
   email: string;
   password: string;
+  /** Website login option; when set, the account's role must belong to it. Omitted by API clients (e.g. the bot). */
+  portal?: LoginPortal;
+}
+
+export class LoginPortalMismatchError extends Error {
+  constructor(public readonly accountPortalLabel: string) {
+    super("LOGIN_PORTAL_MISMATCH");
+  }
 }
 
 export interface RegisterDoctorPayload {
@@ -122,6 +131,10 @@ export const loginDoctor = async (
     // eslint-disable-next-line no-console
     console.error("loginDoctor: invalid password for email", email);
     throw new Error("INVALID_CREDENTIALS");
+  }
+
+  if (payload.portal && !portalAllowsRole(payload.portal, doctor.role)) {
+    throw new LoginPortalMismatchError(portalLabelForRole(doctor.role));
   }
 
   if (doctor.role === "DOCTOR" && doctor.approvalStatus !== "APPROVED") {

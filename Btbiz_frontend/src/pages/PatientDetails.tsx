@@ -2,7 +2,6 @@ import { useEffect, useState, type ReactNode } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { Header } from '../components/Header'
 import { AppLayout } from '../components/layout/AppLayout'
-import { Breadcrumb } from '../components/ui/Breadcrumb'
 import { authStorage } from '../utils/authStorage'
 import { PatientCard, type PatientDetailsData } from '../components/PatientCard'
 import { Button } from '../components/ui/Button'
@@ -41,15 +40,6 @@ export const PatientDetails = () => {
     <AppLayout
       showSidebar
       header={<Header doctorName={doctorName} />}
-      breadcrumb={(
-        <Breadcrumb
-          items={[
-            { label: 'Home', href: '/' },
-            { label: 'Search Patients', href: '/search-patients' },
-            { label: 'Patient Details' },
-          ]}
-        />
-      )}
     >
       {content}
     </AppLayout>

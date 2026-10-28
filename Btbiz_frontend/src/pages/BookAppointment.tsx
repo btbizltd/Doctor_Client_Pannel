@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
+import { toast } from 'react-toastify'
 import {
   publicAppointmentService,
   type ConsultantOption,
@@ -12,9 +13,14 @@ import { patientStorage } from '../utils/patientStorage'
 import { setBookAppointmentBackHandler } from '../utils/bookAppointmentBack'
 import { clearBookingFamilyReturn, peekBookingFamilyReturn, saveBookingFamilyReturn } from '../utils/bookingFamilyReturn'
 import { completedAgeYears } from '../utils/age'
+import {
+  MSG_SELF_MIN_AGE,
+  toDateInputValue,
+  validateFamilyMemberForm,
+  type FamilyMemberFormField,
+} from '../utils/familyMemberForm'
 import { CountryCodePhoneInput } from '../components/CountryCodePhoneInput'
 import { PublicLayout } from '../components/layout/PublicLayout'
-import { Breadcrumb } from '../components/ui/Breadcrumb'
 import { Button } from '../components/ui/Button'
 import { Card } from '../components/ui/Card'
 import { PageHeader } from '../components/ui/PageHeader'
@@ -36,6 +42,15 @@ const BOOKING_FIELD_ELEMENT_IDS: Record<BookingField, string> = {
   slot: 'family-preferred-slot',
 }
 const BOOKING_FIELD_ORDER: BookingField[] = ['member', 'consultant', 'patientName', 'gender', 'date', 'slot']
+
+type MemberField = FamilyMemberFormField
+const MEMBER_FIELD_ELEMENT_IDS: Record<MemberField, string> = {
+  fullName: 'new-member-full-name',
+  relation: 'new-member-relation',
+  gender: 'new-member-gender',
+  dob: 'new-member-dob',
+  address: 'new-member-address',
+}
 
 const CONSULTATION_TYPES = ['New Consultation', 'Review Appointment']
 const REVIEW_CONSULTATION = 'Review Appointment'
@@ -70,8 +85,6 @@ const TIME_SLOTS = [
   '6:00 - 7:00 PM',
 ]
 
-const MSG_SELF_MIN_AGE =
-  'For Self, age must be 18 years or above. Please enter a valid date of birth.'
 const MSG_MINOR_FAMILY_DISCLAIMER =
   'Disclaimer: The date of birth shows age below 18 years. Online booking on this portal is for patients aged 18 years or above. For minors, a parent or guardian should manage this profile.'
 
@@ -211,10 +224,14 @@ export const BookAppointment = () => {
   const [addingMember, setAddingMember] = useState(false)
   const [editingMemberId, setEditingMemberId] = useState<string | null>(null)
   const [newMemberFullName, setNewMemberFullName] = useState('')
-  const [newMemberRelation, setNewMemberRelation] = useState<FamilyRelation>('SELF')
+  const [newMemberRelation, setNewMemberRelation] = useState<FamilyRelation | ''>('')
   const [newMemberGender, setNewMemberGender] = useState<'MALE' | 'FEMALE' | 'OTHER' | ''>('')
   const [newMemberDob, setNewMemberDob] = useState('')
   const [newMemberAddress, setNewMemberAddress] = useState('')
+  const [memberFieldErrors, setMemberFieldErrors] = useState<Partial<Record<MemberField, string>>>({})
+  const [confirmAddMemberOpen, setConfirmAddMemberOpen] = useState(false)
+  const [memberSaving, setMemberSaving] = useState(false)
+  const memberSavingRef = useRef(false)
 
   const [appointmentDate, setAppointmentDate] = useState('')
   const [preferredSlot, setPreferredSlot] = useState('')
@@ -621,68 +638,119 @@ export const BookAppointment = () => {
     return completedAgeYears(d)
   }, [newMemberDob])
 
-  const handleAddFamilyMember = async () => {
+  const resetMemberForm = () => {
+    setAddingMember(false)
+    setEditingMemberId(null)
+    setNewMemberFullName('')
+    setNewMemberRelation('')
+    setNewMemberGender('')
+    setNewMemberDob('')
+    setNewMemberAddress('')
+    setMemberFieldErrors({})
+    setConfirmAddMemberOpen(false)
+  }
+
+  const clearMemberFieldError = (field: MemberField) => {
+    setMemberFieldErrors((prev) => {
+      if (!prev[field]) return prev
+      const next = { ...prev }
+      delete next[field]
+      return next
+    })
+  }
+
+  /** Validates the member form; new members go through a confirmation popup before saving. */
+  const handleSaveMemberClick = () => {
     setError(null)
     if (!familyAccountId) {
       setError('Please login with your mobile number first.')
       return
     }
-    if (!newMemberFullName.trim()) {
-      setError('Please enter member full name.')
+    const errors = validateFamilyMemberForm({
+      fullName: newMemberFullName,
+      relation: newMemberRelation,
+      gender: newMemberGender,
+      dob: newMemberDob,
+      address: newMemberAddress,
+      ageYears: newMemberDobAge,
+    })
+    setMemberFieldErrors(errors)
+    const firstInvalid = (Object.keys(MEMBER_FIELD_ELEMENT_IDS) as MemberField[]).find((f) => errors[f])
+    if (firstInvalid) {
+      document.getElementById(MEMBER_FIELD_ELEMENT_IDS[firstInvalid])?.focus()
       return
     }
-    if (newMemberDobAge !== null && newMemberRelation === 'SELF' && newMemberDobAge < 18) {
-      setError(MSG_SELF_MIN_AGE)
-      return
+    if (editingMemberId) {
+      void handleAddFamilyMember()
+    } else {
+      setConfirmAddMemberOpen(true)
     }
+  }
+
+  const handleAddFamilyMember = async () => {
+    if (!familyAccountId || !newMemberRelation || memberSavingRef.current) return
+    memberSavingRef.current = true
+    setMemberSaving(true)
+    setError(null)
+    const isEdit = Boolean(editingMemberId)
+    let saved = false
     try {
+      let savedMemberId: string | null = editingMemberId
       if (editingMemberId) {
         await publicAppointmentService.updateFamilyMember(editingMemberId, {
           fullName: newMemberFullName.trim(),
           relation: newMemberRelation,
           gender: newMemberGender || undefined,
           dateOfBirth: newMemberDob || undefined,
-          address: newMemberAddress || undefined,
+          address: newMemberAddress.trim() || undefined,
         })
       } else {
-        await publicAppointmentService.addFamilyMember({
+        const created = await publicAppointmentService.addFamilyMember({
           accountId: familyAccountId,
           fullName: newMemberFullName.trim(),
           relation: newMemberRelation,
           gender: newMemberGender || undefined,
           dateOfBirth: newMemberDob || undefined,
-          address: newMemberAddress || undefined,
+          address: newMemberAddress.trim() || undefined,
         })
+        savedMemberId = created.member?.id ?? null
       }
+      saved = true
+      const savedName = newMemberFullName.trim()
+      resetMemberForm()
+      toast.success(isEdit ? `${savedName} updated.` : `${savedName} added to your family.`, { autoClose: 3000 })
       const list = await publicAppointmentService.listFamilyMembers({ accountId: familyAccountId })
-      setFamilyMembers(list.members ?? [])
-      if (!editingMemberId) {
-        const last = (list.members ?? [])[list.members.length - 1]
-        if (last?.id) {
-          handleSelectFamilyMember(last.id, list.members ?? [])
+      const members = list.members ?? []
+      setFamilyMembers(members)
+      if (!isEdit) {
+        const added = members.find((m) => m.id === savedMemberId) ?? members[members.length - 1]
+        if (added?.id) {
+          handleSelectFamilyMember(added.id, members)
           focusFamilyBookingFields()
         }
       }
-      setAddingMember(false)
-      setEditingMemberId(null)
-      setNewMemberFullName('')
-      setNewMemberRelation('SELF')
-      setNewMemberGender('')
-      setNewMemberDob('')
-      setNewMemberAddress('')
     } catch (err: any) {
-      const msg = err?.response?.data?.message
-      setError(typeof msg === 'string' ? msg : 'Failed to add family member. Please try again.')
+      setConfirmAddMemberOpen(false)
+      if (saved) {
+        setError('Member saved, but the family list could not be refreshed. Please reload the page.')
+      } else {
+        const msg = err?.response?.data?.message
+        setError(typeof msg === 'string' ? msg : 'Failed to add family member. Please try again.')
+      }
+    } finally {
+      memberSavingRef.current = false
+      setMemberSaving(false)
     }
   }
 
   const startEditMember = (member: FamilyMemberSummary) => {
     setAddingMember(true)
     setEditingMemberId(member.id)
+    setMemberFieldErrors({})
     setNewMemberFullName(member.fullName)
     setNewMemberRelation(member.relation)
-    setNewMemberGender((member.gender as any) || '')
-    setNewMemberDob(member.dateOfBirth ?? '')
+    setNewMemberGender((member.gender as any) || (member.patient?.gender as typeof newMemberGender | undefined) || '')
+    setNewMemberDob(toDateInputValue(member.dateOfBirth ?? member.patient?.dateOfBirth))
     setNewMemberAddress(member.patient?.address ?? '')
   }
 
@@ -1308,52 +1376,71 @@ export const BookAppointment = () => {
                 name="newMemberFullName"
                 type="text"
                 value={newMemberFullName}
-                onChange={(e) => setNewMemberFullName(e.target.value)}
+                onChange={(e) => {
+                  setNewMemberFullName(e.target.value)
+                  clearMemberFieldError('fullName')
+                }}
                 placeholder="e.g. Rohan Sharma"
+                error={memberFieldErrors.fullName}
               />
               <div className="book-appointment-form-grid">
-                <div className="book-appointment-select-field">
+                <div className={`book-appointment-select-field${memberFieldErrors.relation ? ' book-appointment-select-field--error' : ''}`}>
                   <label htmlFor="new-member-relation">Relation *</label>
                   <select
                     id="new-member-relation"
                     name="newMemberRelation"
                     value={newMemberRelation}
-                    onChange={(e) => setNewMemberRelation(e.target.value as FamilyRelation)}
+                    onChange={(e) => {
+                      setNewMemberRelation(e.target.value as FamilyRelation | '')
+                      clearMemberFieldError('relation')
+                    }}
+                    aria-invalid={memberFieldErrors.relation ? true : undefined}
                   >
+                    <option value="">Select Relation</option>
                     {RELATIONS.map((r) => (
                       <option key={r.value} value={r.value}>{r.label}</option>
                     ))}
                   </select>
+                  {memberFieldErrors.relation && <p className="book-appointment-field-error">{memberFieldErrors.relation}</p>}
                 </div>
-                <div className="book-appointment-select-field">
-                  <label htmlFor="new-member-gender">Gender</label>
+                <div className={`book-appointment-select-field${memberFieldErrors.gender ? ' book-appointment-select-field--error' : ''}`}>
+                  <label htmlFor="new-member-gender">Gender *</label>
                   <select
                     id="new-member-gender"
                     name="newMemberGender"
                     value={newMemberGender}
-                    onChange={(e) => setNewMemberGender(e.target.value as any)}
+                    onChange={(e) => {
+                      setNewMemberGender(e.target.value as any)
+                      clearMemberFieldError('gender')
+                    }}
+                    aria-invalid={memberFieldErrors.gender ? true : undefined}
                   >
                     <option value="">Select Gender</option>
                     {GENDERS.map((g) => (
                       <option key={g} value={g}>{g}</option>
                     ))}
                   </select>
+                  {memberFieldErrors.gender && <p className="book-appointment-field-error">{memberFieldErrors.gender}</p>}
                 </div>
               </div>
               <div className="book-appointment-form-grid">
                 <div>
                   <TextField
-                    label="Date of Birth"
+                    label="Date of Birth *"
                     id="new-member-dob"
                     name="newMemberDob"
                     type="date"
                     value={newMemberDob}
-                    onChange={(e) => setNewMemberDob(e.target.value)}
+                    onChange={(e) => {
+                      setNewMemberDob(e.target.value)
+                      clearMemberFieldError('dob')
+                    }}
                     hint="Self: age must be 18 years or above. For other relations, minors may be added; see disclaimer below if age is under 18."
                     error={
-                      newMemberDobAge !== null && newMemberDobAge < 18 && newMemberRelation === 'SELF'
+                      memberFieldErrors.dob ??
+                      (newMemberDobAge !== null && newMemberDobAge < 18 && newMemberRelation === 'SELF'
                         ? MSG_SELF_MIN_AGE
-                        : undefined
+                        : undefined)
                     }
                   />
                   {newMemberDobAge !== null && newMemberDobAge < 18 && newMemberRelation !== 'SELF' && (
@@ -1363,31 +1450,34 @@ export const BookAppointment = () => {
                   )}
                 </div>
                 <TextField
-                  label="Address"
+                  label="Address *"
                   id="new-member-address"
                   name="newMemberAddress"
                   type="text"
                   value={newMemberAddress}
-                  onChange={(e) => setNewMemberAddress(e.target.value)}
+                  onChange={(e) => {
+                    setNewMemberAddress(e.target.value)
+                    clearMemberFieldError('address')
+                  }}
+                  error={memberFieldErrors.address}
                 />
               </div>
               <div className="book-appointment-member-form-actions">
                 <Button
-                  onClick={handleAddFamilyMember}
+                  onClick={handleSaveMemberClick}
                   disabled={
-                    newMemberDobAge !== null &&
-                    newMemberRelation === 'SELF' &&
-                    newMemberDobAge < 18
+                    memberSaving ||
+                    (newMemberDobAge !== null &&
+                      newMemberRelation === 'SELF' &&
+                      newMemberDobAge < 18)
                   }
                 >
-                  Save Member
+                  {memberSaving ? 'Saving…' : 'Save Member'}
                 </Button>
                 <Button
                   variant="secondary"
-                  onClick={() => {
-                    setAddingMember(false)
-                    setEditingMemberId(null)
-                  }}
+                  disabled={memberSaving}
+                  onClick={resetMemberForm}
                 >
                   Cancel
                 </Button>
@@ -1819,14 +1909,6 @@ export const BookAppointment = () => {
                   ? 'Choose how you would like to pay.'
                   : 'Enter family details and pick a date for your visit.'
           }
-          breadcrumb={(
-            <Breadcrumb
-              items={[
-                { label: 'Home', href: '/' },
-                { label: 'Book Appointment' },
-              ]}
-            />
-          )}
         />
         {policyAccepted && (
           <div className="book-appointment-stats" aria-label="Booking progress">
@@ -1938,6 +2020,39 @@ export const BookAppointment = () => {
                 }}
               >
                 Yes, delete
+              </Button>
+            </div>
+          </Card>
+        </div>
+      )}
+      {confirmAddMemberOpen && (
+        <div className="book-appointment-modal-overlay" role="dialog" aria-modal="true" aria-labelledby="add-member-title">
+          <Card className="book-appointment-modal-card" elevated>
+            <h3 id="add-member-title">Add family member?</h3>
+            <p>
+              <strong>{newMemberFullName.trim()}</strong>
+              {' '}({RELATIONS.find((r) => r.value === newMemberRelation)?.label ?? newMemberRelation})
+              {' · '}{newMemberGender}
+              {' · '}{formatDisplayDate(newMemberDob)}
+            </p>
+            <p>{newMemberAddress.trim()}</p>
+            <p>This person will be added to your family list once.</p>
+            <div className="book-appointment-modal-actions">
+              <Button
+                variant="secondary"
+                disabled={memberSaving}
+                onClick={() => setConfirmAddMemberOpen(false)}
+              >
+                Cancel
+              </Button>
+              <Button
+                autoFocus
+                disabled={memberSaving}
+                onClick={() => {
+                  void handleAddFamilyMember()
+                }}
+              >
+                {memberSaving ? 'Adding…' : 'Yes, add member'}
               </Button>
             </div>
           </Card>

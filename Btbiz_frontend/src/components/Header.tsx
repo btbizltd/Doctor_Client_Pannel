@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 
 import { authService } from '../services/api'
 import { authStorage } from '../utils/authStorage'
+import { loginPathForRole } from '../utils/loginPortal'
 
 interface HeaderProps {
   clinicName?: string
@@ -34,7 +35,7 @@ export const Header: FC<HeaderProps> = ({
   const handleLogout = async () => {
     await authService.logout()
     authStorage.clear()
-    navigate('/login')
+    navigate(loginPathForRole(role))
   }
 
   return (

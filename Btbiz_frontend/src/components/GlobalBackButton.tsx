@@ -3,6 +3,7 @@ import { useNavigate, useLocation } from 'react-router-dom'
 
 import { authService } from '../services/api'
 import { authStorage } from '../utils/authStorage'
+import { loginPathForRole } from '../utils/loginPortal'
 import { tryBookAppointmentBack } from '../utils/bookAppointmentBack'
 
 export const GlobalBackButton = () => {
@@ -49,6 +50,7 @@ export const GlobalBackButton = () => {
   }
 
   const handleConfirmLogout = async () => {
+    const loginPath = loginPathForRole(authStorage.getRole())
     try {
       await authService.logout()
     } catch {
@@ -56,7 +58,7 @@ export const GlobalBackButton = () => {
     } finally {
       authStorage.clear()
       setShowLogoutConfirm(false)
-      navigate('/login', { replace: true })
+      navigate(loginPath, { replace: true })
     }
   }
 

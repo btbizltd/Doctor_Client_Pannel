@@ -21,7 +21,6 @@ import {
 import { patientStorage } from '../utils/patientStorage'
 import { peekBookingFamilyReturn } from '../utils/bookingFamilyReturn'
 import { PublicLayout } from '../components/layout/PublicLayout'
-import { Breadcrumb } from '../components/ui/Breadcrumb'
 import { Button } from '../components/ui/Button'
 import { Card } from '../components/ui/Card'
 import { DnaLoader } from '../components/ui/DnaLoader'
@@ -396,6 +395,7 @@ export const PatientProfile = () => {
   const [addMedicineEtaMinutes, setAddMedicineEtaMinutes] = useState('')
   const [pharmacyProviders, setPharmacyProviders] = useState<ServiceProviderOption[]>([])
   const [selectedPharmacyProviderId, setSelectedPharmacyProviderId] = useState('')
+  const [pharmacyProviderError, setPharmacyProviderError] = useState<string | null>(null)
   const [pendingMedicines, setPendingMedicines] = useState<PendingMedicineItem[]>([])
   const [addTestName, setAddTestName] = useState('')
   const [pendingTestNames, setPendingTestNames] = useState<string[]>([])
@@ -406,6 +406,7 @@ export const PatientProfile = () => {
   const [addTestEtaMinutes, setAddTestEtaMinutes] = useState('')
   const [labProviders, setLabProviders] = useState<ServiceProviderOption[]>([])
   const [selectedLabProviderId, setSelectedLabProviderId] = useState('')
+  const [labProviderError, setLabProviderError] = useState<string | null>(null)
   const [providerGeoStatus, setProviderGeoStatus] = useState<'loading' | 'ok' | 'none'>('loading')
   const [providersLoading, setProvidersLoading] = useState(false)
   const [patientCoords, setPatientCoords] = useState<{ lat: number; lng: number } | null>(null)
@@ -534,10 +535,6 @@ export const PatientProfile = () => {
   const loadProviderLists = useCallback(
     async (opts?: { lat?: number; lng?: number; forceGps?: boolean }) => {
       const patientAddress = data?.patient?.address?.trim()
-      if (!patientAddress && opts?.lat == null && !opts?.forceGps) {
-        setProviderGeoStatus('none')
-        return
-      }
 
       setProvidersLoading(true)
       setProviderGeoStatus('loading')
@@ -579,24 +576,21 @@ export const PatientProfile = () => {
           return
         }
 
-        // 1) Home / profile address first (works even when browser blocks GPS)
-        if (patientAddress) {
-          await fetchLists()
-        }
+        // 1) Home / profile address first (works even when browser blocks GPS). Without an address
+        //    this still loads every lab/pharmacy so the patient can choose one.
+        await fetchLists()
 
         // 2) Refine with live GPS when allowed (more accurate if patient is not at home)
         if (navigator.geolocation) {
           await new Promise<void>((resolve) => {
             navigator.geolocation.getCurrentPosition(
               (pos) => {
-                void fetchLists(pos.coords.latitude, pos.coords.longitude).then(resolve)
+                void fetchLists(pos.coords.latitude, pos.coords.longitude).then(resolve, () => resolve())
               },
               () => resolve(),
               { timeout: 8000, maximumAge: 300000, enableHighAccuracy: false },
             )
           })
-        } else if (!patientAddress) {
-          await fetchLists()
         }
       } catch {
         setLabProviders([])
@@ -660,14 +654,6 @@ export const PatientProfile = () => {
       className="patient-profile-page-header"
       title="My Health Profile"
       subtitle={`Hello, ${patientName}`}
-      breadcrumb={(
-        <Breadcrumb
-          items={[
-            { label: 'Home', href: '/' },
-            { label: 'My Profile' },
-          ]}
-        />
-      )}
       actions={(
         <>
           {peekBookingFamilyReturn() ? (
@@ -852,6 +838,14 @@ export const PatientProfile = () => {
       toast.error('Please enter a medicine name.')
       return
     }
+    if (!selectedPharmacyProviderId) {
+      setPharmacyProviderError('Please choose a pharmacy.')
+      toast.error('Please choose a pharmacy for this medicine.')
+      const select = document.getElementById('pharmacy-provider-select')
+      select?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      select?.focus()
+      return
+    }
     setAddingMedicine(true)
     try {
       await patientPortalService.addMedicine({
@@ -862,7 +856,7 @@ export const PatientProfile = () => {
         expectedFulfillmentMinutes: addMedicineEtaMinutes.trim()
           ? Number(addMedicineEtaMinutes)
           : undefined,
-        preferredProviderId: selectedPharmacyProviderId || undefined,
+        preferredProviderId: selectedPharmacyProviderId,
       })
       setAddMedicineName('')
       setAddMedicineDosage('')
@@ -886,6 +880,14 @@ export const PatientProfile = () => {
       toast.error('Please enter a test name.')
       return
     }
+    if (!selectedLabProviderId) {
+      setLabProviderError('Please choose a lab.')
+      toast.error('Please choose a lab for this test.')
+      const select = document.getElementById('lab-provider-select')
+      select?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      select?.focus()
+      return
+    }
     setAddingTest(true)
     try {
       await patientPortalService.addTest({
@@ -895,7 +897,7 @@ export const PatientProfile = () => {
         paymentMode: addTestPaymentMode,
         preferredDateTime: addTestPreferredDateTime || undefined,
         expectedFulfillmentMinutes: addTestEtaMinutes.trim() ? Number(addTestEtaMinutes) : undefined,
-        preferredProviderId: selectedLabProviderId || undefined,
+        preferredProviderId: selectedLabProviderId,
       })
       setAddTestName('')
       setPendingTestNames([])
@@ -1427,16 +1429,28 @@ export const PatientProfile = () => {
 
           <Card className="patient-profile-lab-toolbar-card" elevated>
             <div className="patient-profile-lab-toolbar">
-              <div className="patient-profile-lab-select-field">
-                <label htmlFor="lab-provider-select">Choose lab</label>
+              <div
+                className={`patient-profile-lab-select-field${labProviderError ? ' patient-profile-select-field--error' : ''}`}
+              >
+                <label htmlFor="lab-provider-select">Choose lab *</label>
                 <select
                   id="lab-provider-select"
                   value={selectedLabProviderId}
-                  onChange={(e) => setSelectedLabProviderId(e.target.value)}
+                  onChange={(e) => {
+                    setSelectedLabProviderId(e.target.value)
+                    if (e.target.value) setLabProviderError(null)
+                  }}
                   className="patient-profile-provider-select"
                   aria-label="Choose lab"
+                  aria-invalid={labProviderError ? true : undefined}
                 >
-                  <option value="">Choose lab (auto-assign if not selected)</option>
+                  <option value="">
+                    {providersLoading && labProviders.length === 0
+                      ? 'Loading labs…'
+                      : labProviders.length === 0
+                        ? 'No labs available'
+                        : 'Select a lab'}
+                  </option>
                   {labProviders.map((lab) => (
                     <option key={lab.id} value={lab.id}>
                       {formatProviderOptionLabel(
@@ -1448,6 +1462,7 @@ export const PatientProfile = () => {
                     </option>
                   ))}
                 </select>
+                {labProviderError && <p className="patient-profile-field-error" role="alert">{labProviderError}</p>}
               </div>
               <ProviderDistanceActions
                 loading={providersLoading}
@@ -1905,16 +1920,28 @@ export const PatientProfile = () => {
 
           <Card className="patient-profile-medicine-toolbar-card" elevated>
             <div className="patient-profile-medicine-toolbar">
-              <div className="patient-profile-medicine-select-field">
-                <label htmlFor="pharmacy-provider-select">Choose pharmacy</label>
+              <div
+                className={`patient-profile-medicine-select-field${pharmacyProviderError ? ' patient-profile-select-field--error' : ''}`}
+              >
+                <label htmlFor="pharmacy-provider-select">Choose pharmacy *</label>
                 <select
                   id="pharmacy-provider-select"
                   value={selectedPharmacyProviderId}
-                  onChange={(e) => setSelectedPharmacyProviderId(e.target.value)}
+                  onChange={(e) => {
+                    setSelectedPharmacyProviderId(e.target.value)
+                    if (e.target.value) setPharmacyProviderError(null)
+                  }}
                   className="patient-profile-provider-select"
                   aria-label="Choose pharmacy"
+                  aria-invalid={pharmacyProviderError ? true : undefined}
                 >
-                  <option value="">Choose pharmacy (auto-assign if not selected)</option>
+                  <option value="">
+                    {providersLoading && pharmacyProviders.length === 0
+                      ? 'Loading pharmacies…'
+                      : pharmacyProviders.length === 0
+                        ? 'No pharmacies available'
+                        : 'Select a pharmacy'}
+                  </option>
                   {pharmacyProviders.map((ph) => (
                     <option key={ph.id} value={ph.id}>
                       {formatProviderOptionLabel(
@@ -1926,6 +1953,9 @@ export const PatientProfile = () => {
                     </option>
                   ))}
                 </select>
+                {pharmacyProviderError && (
+                  <p className="patient-profile-field-error" role="alert">{pharmacyProviderError}</p>
+                )}
               </div>
               <ProviderDistanceActions
                 loading={providersLoading}

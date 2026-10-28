@@ -13,7 +13,6 @@ import {
 
 import { Header } from '../components/Header'
 import { AppLayout } from '../components/layout/AppLayout'
-import { Breadcrumb } from '../components/ui/Breadcrumb'
 import { Card } from '../components/ui/Card'
 import { PageHeader } from '../components/ui/PageHeader'
 import { Skeleton } from '../components/ui/Skeleton'
@@ -142,15 +141,6 @@ export const SuperAdminIntelligence = () => {
     <AppLayout
       showSidebar
       header={<Header clinicName="Intelligence Dashboard" doctorName={name} />}
-      breadcrumb={(
-        <Breadcrumb
-          items={[
-            { label: 'Home', href: '/' },
-            { label: 'Super Admin', href: '/super-admin' },
-            { label: 'Intelligence' },
-          ]}
-        />
-      )}
     >
       <main className="dashboard-main super-admin-intelligence-main">
         <section className="super-admin-intelligence-section">

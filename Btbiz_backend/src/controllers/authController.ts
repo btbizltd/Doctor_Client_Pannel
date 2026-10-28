@@ -10,6 +10,7 @@ import {
   createLabAssistant,
   deleteLabAssistant,
   listLabAssistants as listLabAssistantsService,
+  LoginPortalMismatchError,
   loginDoctor,
   registerDoctor,
   registerLabManager,
@@ -17,6 +18,7 @@ import {
   startDoctorPasswordReset
 } from "../services/authService";
 import { trackEvent } from "../services/analyticsService";
+import { isLoginPortal } from "../utils/loginPortal";
 import {
   DoctorProfileValidationError,
   PUBLIC_DOCTOR_SELECT,
@@ -156,17 +158,26 @@ export const pharmacyRegister = async (req: Request, res: Response): Promise<voi
 
 export const doctorLogin = async (req: Request, res: Response): Promise<void> => {
   try {
-    const { email, password } = req.body as {
+    const { email, password, portal } = req.body as {
       email?: string;
       password?: string;
+      portal?: unknown;
     };
 
     if (!email || !password) {
       res.status(400).json({ message: "Email and password are required" });
       return;
     }
+    if (portal !== undefined && portal !== null && !isLoginPortal(portal)) {
+      res.status(400).json({ message: "Invalid login type" });
+      return;
+    }
 
-    const authResponse = await loginDoctor({ email, password });
+    const authResponse = await loginDoctor({
+      email,
+      password,
+      ...(isLoginPortal(portal) ? { portal } : {})
+    });
 
     trackEvent({
       eventType: "user.login",
@@ -190,6 +201,19 @@ export const doctorLogin = async (req: Request, res: Response): Promise<void> =>
         metadata: { reason: "INVALID_CREDENTIALS" },
       });
       res.status(401).json({ message: "Invalid email or password" });
+      return;
+    }
+    if (error instanceof LoginPortalMismatchError) {
+      trackEvent({
+        eventType: "user.login",
+        success: false,
+        route: "/auth/login",
+        metadata: { reason: "LOGIN_PORTAL_MISMATCH" },
+      });
+      res.status(403).json({
+        message: `This is ${/^[aeiou]/i.test(error.accountPortalLabel) ? "an" : "a"} ${error.accountPortalLabel} account. Please sign in using the ${error.accountPortalLabel} login.`,
+        code: "LOGIN_PORTAL_MISMATCH"
+      });
       return;
     }
     if (error instanceof Error && error.message === "ACCOUNT_PENDING_APPROVAL") {
@@ -499,14 +523,16 @@ export const updateDoctorClinic = async (
   req: Request,
   res: Response
 ): Promise<void> => {
-  const canSetLocation =
-    req.doctor &&
-    (req.doctor.role === "DOCTOR" ||
-      req.doctor.role === "PHARMACY" ||
-      req.doctor.role === "LAB_MANAGER");
-  if (!canSetLocation) {
+  if (req.doctor?.role === "PHARMACY" || req.doctor?.role === "LAB_MANAGER") {
     res.status(403).json({
-      message: "Only clinic, pharmacy, or lab accounts can update shop location",
+      message: "Shop location is managed by Super Admin. Please contact Super Admin to change it.",
+      code: "LOCATION_MANAGED_BY_SUPER_ADMIN",
+    });
+    return;
+  }
+  if (req.doctor?.role !== "DOCTOR") {
+    res.status(403).json({
+      message: "Only clinic accounts can update clinic location",
     });
     return;
   }

@@ -4,7 +4,6 @@ import axios from 'axios';
 import { toast } from 'react-toastify';
 import { Header } from './Header';
 import { AppLayout } from './layout/AppLayout';
-import { Breadcrumb } from './ui/Breadcrumb';
 import { authStorage } from '../utils/authStorage';
 
 interface ExtractedData {
@@ -85,14 +84,6 @@ const HandwritingExtractor: React.FC = () => {
     <AppLayout
       showSidebar
       header={<Header doctorName={doctorName} />}
-      breadcrumb={(
-        <Breadcrumb
-          items={[
-            { label: 'Home', href: '/' },
-            { label: 'Handwriting OCR' },
-          ]}
-        />
-      )}
     >
       <main className="dashboard-main">
         <div className="p-6 max-w-2xl mx-auto">

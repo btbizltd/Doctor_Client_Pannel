@@ -2,9 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { toast } from 'react-toastify'
 import { Header } from '../components/Header'
 import { AppLayout } from '../components/layout/AppLayout'
-import { ClinicLocationSetup } from '../components/ClinicLocationSetup'
 import { authStorage } from '../utils/authStorage'
-import { Breadcrumb } from '../components/ui/Breadcrumb'
 import { EmptyState } from '../components/ui/EmptyState'
 import { PharmacyIcon } from '../components/ui/icons'
 import { Card } from '../components/ui/Card'
@@ -14,6 +12,7 @@ import { Skeleton } from '../components/ui/Skeleton'
 import { StatCard } from '../components/ui/StatCard'
 import { TextField } from '../components/ui/TextField'
 import { Button } from '../components/ui/Button'
+import { VerifiedPrescriptionAction } from '../components/VerifiedPrescriptionAction'
 import {
   patientService,
   pharmacyService,
@@ -696,22 +695,7 @@ export const MedicineDashboard = () => {
   return (
     <AppLayout
       showSidebar
-      header={(
-        <>
-          <Header doctorName={name} />
-          <div className="medicine-dashboard-clinic-setup">
-            <ClinicLocationSetup />
-          </div>
-        </>
-      )}
-      breadcrumb={(
-        <Breadcrumb
-          items={[
-            { label: 'Home', href: '/' },
-            { label: 'Pharmacy' },
-          ]}
-        />
-      )}
+      header={<Header doctorName={name} />}
     >
       <main className="dashboard-main medicine-dashboard-main">
         <section className="medicine-dashboard-section">
@@ -869,28 +853,7 @@ export const MedicineDashboard = () => {
                     {patient.bloodGroup && ` · Blood group: ${patient.bloodGroup}`}
                     {patient.address && ` · ${patient.address}`}
                   </p>
-                  {history.documents?.length ? (
-                    <div style={{ marginTop: 10, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                      <Button
-                        type="button"
-                        variant="secondary"
-                        onClick={() =>
-                          void patientService.openDocument(patient.id, history.documents[0].id, {
-                            assistantVerified: Boolean(history.documents[0].verifiedAt),
-                          })
-                        }
-                      >
-                        View prescription (secure)
-                      </Button>
-                      <span style={{ fontSize: 12, color: '#64748b', alignSelf: 'center' }}>
-                        Latest uploaded prescription
-                      </span>
-                    </div>
-                  ) : (
-                    <p style={{ marginTop: 10, fontSize: 12, color: '#64748b' }}>
-                      No prescription uploaded for this patient yet.
-                    </p>
-                  )}
+                  <VerifiedPrescriptionAction patientId={patient.id} history={history} />
                 </Card>
               </div>
 

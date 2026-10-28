@@ -1,9 +1,8 @@
-import { useMemo, useState, useEffect, useCallback } from 'react'
+import { useMemo, useRef, useState, useEffect, useCallback, type ChangeEvent } from 'react'
 import { toast } from 'react-toastify'
 
 import { Header } from '../components/Header'
 import { AppLayout } from '../components/layout/AppLayout'
-import { Breadcrumb } from '../components/ui/Breadcrumb'
 import { Card } from '../components/ui/Card'
 import { DataTable } from '../components/ui/DataTable'
 import { PageHeader } from '../components/ui/PageHeader'
@@ -12,7 +11,14 @@ import { EmptyState } from '../components/ui/EmptyState'
 import { StatCard } from '../components/ui/StatCard'
 import { LabIcon, PharmacyIcon, UserIcon } from '../components/ui/icons'
 import { SuperAdminDoctorEditor } from '../components/SuperAdminDoctorEditor'
+import { TextField } from '../components/ui/TextField'
 import { doctorInitials } from '../utils/doctorDirectory'
+import {
+  LOW_ACCURACY_METERS,
+  describeAccuracy,
+  formatCoordinates,
+  mapCheckHref,
+} from '../utils/mapLocation'
 import { authStorage } from '../utils/authStorage'
 import {
   authService,
@@ -49,6 +55,7 @@ const emptyPartnerForm = () => ({
   addressLine1: '',
   addressCity: '',
   addressPincode: '',
+  mapUrl: '',
   statusActive: true,
 })
 
@@ -103,6 +110,9 @@ export const SuperAdminDashboard = () => {
   const [form, setForm] = useState(emptyPartnerForm)
   const [saving, setSaving] = useState(false)
   const [geocoding, setGeocoding] = useState(false)
+  const [locating, setLocating] = useState(false)
+  const [locateInfo, setLocateInfo] = useState<{ value: string; accuracy: number } | null>(null)
+  const locateRequestRef = useRef(0)
   const [editingDoctorId, setEditingDoctorId] = useState<string | null>(null)
   const [doctorQuery, setDoctorQuery] = useState('')
   const closeDoctorEditor = useCallback(() => setEditingDoctorId(null), [])
@@ -147,7 +157,55 @@ export const SuperAdminDashboard = () => {
     setShowForm(false)
     setEditTarget(null)
     setForm(emptyPartnerForm())
+    locateRequestRef.current += 1
+    setLocating(false)
+    setLocateInfo(null)
   }
+
+  const handleLocateMe = () => {
+    if (!window.isSecureContext || !navigator.geolocation) {
+      toast.error('Location is not available here. Open the site over https, or paste the shop’s coordinates.')
+      return
+    }
+    const requestId = ++locateRequestRef.current
+    setLocating(true)
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        if (requestId !== locateRequestRef.current) return
+        const value = formatCoordinates(pos.coords.latitude, pos.coords.longitude)
+        setForm((f) => ({ ...f, mapUrl: value }))
+        setLocateInfo({ value, accuracy: pos.coords.accuracy })
+        setLocating(false)
+      },
+      (err) => {
+        if (requestId !== locateRequestRef.current) return
+        setLocating(false)
+        toast.error(
+          err.code === err.PERMISSION_DENIED
+            ? 'Location permission was denied. Allow location for this site in the browser settings, then try again.'
+            : err.code === err.TIMEOUT
+              ? 'Finding your location took too long. Try again, ideally on a phone with GPS on.'
+              : 'Could not find your location. Try again, or paste the shop’s coordinates.'
+        )
+      },
+      { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 }
+    )
+  }
+
+  useEffect(() => {
+    if (!showForm || saving) return undefined
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      setShowForm(false)
+      setEditTarget(null)
+      setForm(emptyPartnerForm())
+      locateRequestRef.current += 1
+      setLocating(false)
+      setLocateInfo(null)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [showForm, saving])
 
   const openCreateForm = () => {
     setEditTarget(null)
@@ -163,6 +221,10 @@ export const SuperAdminDashboard = () => {
       slug: tenant.slug,
       email: tenant.ownerEmail ?? '',
       phone: tenant.phone ?? '',
+      addressLine1: tenant.address?.line1 ?? '',
+      addressCity: tenant.address?.city ?? '',
+      addressPincode: tenant.address?.pincode ?? '',
+      mapUrl: tenant.address?.mapUrl ?? '',
       statusActive: tenant.status === 'ACTIVE',
     })
     setShowForm(true)
@@ -251,19 +313,26 @@ export const SuperAdminDashboard = () => {
 
     const tenantType = openCard === 'pharmacies' ? 'PHARMACY' : 'LAB'
 
+    const buildAddress = (state: string | undefined) => {
+      const line1 = form.addressLine1.trim()
+      const city = form.addressCity.trim()
+      const pincode = form.addressPincode.trim()
+      const mapUrl = form.mapUrl.trim()
+      if (!line1 && !city && !pincode && !mapUrl) return undefined
+      return {
+        line1: line1 || undefined,
+        city: city || undefined,
+        pincode: pincode || undefined,
+        state,
+        mapUrl,
+      }
+    }
+
     try {
       setSaving(true)
 
       if (editTarget) {
-        const address =
-          form.addressLine1.trim() || form.addressCity.trim() || form.addressPincode.trim()
-            ? {
-                line1: form.addressLine1.trim() || undefined,
-                city: form.addressCity.trim() || undefined,
-                pincode: form.addressPincode.trim() || undefined,
-                state: 'Haryana',
-              }
-            : undefined
+        const address = buildAddress(editTarget.address ? editTarget.address.state : 'Haryana')
         await authService.updateSuperAdminTenant(editTarget.id, {
           name: form.name.trim(),
           slug: form.slug.trim() || undefined,
@@ -275,15 +344,7 @@ export const SuperAdminDashboard = () => {
         })
         toast.success('Tenant updated successfully.')
       } else {
-        const address =
-          form.addressLine1.trim() || form.addressCity.trim() || form.addressPincode.trim()
-            ? {
-                line1: form.addressLine1.trim() || undefined,
-                city: form.addressCity.trim() || undefined,
-                pincode: form.addressPincode.trim() || undefined,
-                state: 'Haryana',
-              }
-            : undefined
+        const address = buildAddress('Haryana')
         const ownerEmail = form.email.trim().toLowerCase()
         const ownerPassword = form.password.trim()
         await authService.createSuperAdminTenant({
@@ -465,6 +526,7 @@ export const SuperAdminDashboard = () => {
           { label: 'Slug' },
           { label: 'Owner login' },
           { label: 'Phone' },
+          { label: 'Location' },
           { label: 'Status' },
           { label: 'Action', align: 'center' },
         ]}
@@ -479,6 +541,25 @@ export const SuperAdminDashboard = () => {
               {t.ownerName ? ` (${t.ownerName})` : ''}
             </td>
             <td>{t.phone ?? '—'}</td>
+            <td>
+              {[t.address?.line1, t.address?.city, t.address?.pincode].filter(Boolean).join(', ') || '—'}
+              <br />
+              <small style={{ color: t.locationSet ? '#166534' : '#b45309' }}>
+                {t.locationSet
+                  ? t.address?.mapUrl
+                    ? 'Exact map pin set (link / coordinates)'
+                    : 'Map pin set'
+                  : 'Not set — Edit to add address or map link'}
+              </small>
+              {mapCheckHref(t.address?.mapUrl) && (
+                <>
+                  {' · '}
+                  <a href={mapCheckHref(t.address?.mapUrl) ?? undefined} target="_blank" rel="noopener noreferrer">
+                    <small>Open map</small>
+                  </a>
+                </>
+              )}
+            </td>
             <td className={t.status === 'ACTIVE' ? 'super-admin-td-status super-admin-td-status--active' : 'super-admin-td-status super-admin-td-status--inactive'}>
               {t.status}
             </td>
@@ -493,90 +574,122 @@ export const SuperAdminDashboard = () => {
   }
   const renderPartnerForm = () => {
     const isEdit = !!editTarget
+    const kind = openCard === 'pharmacies' ? 'pharmacy' : 'lab'
+    const close = () => {
+      if (!saving) resetFormState()
+    }
+    const field = (key: keyof Omit<ReturnType<typeof emptyPartnerForm>, 'statusActive'>) => ({
+      value: form[key],
+      onChange: (e: ChangeEvent<HTMLInputElement>) => setForm((f) => ({ ...f, [key]: e.target.value })),
+      disabled: saving,
+    })
     return (
-      <div
-        style={{
-          marginTop: 14,
-          padding: 14,
-          borderRadius: 10,
-          border: '1px solid #e2e8f0',
-          display: 'grid',
-          gap: 10,
-          maxWidth: 480,
-        }}
-      >
-        <p className="dashboard-body" style={{ margin: 0, fontWeight: 600 }}>
-          {isEdit ? 'Edit details' : 'Add new tenant'}
-        </p>
-        <input
-          placeholder="Business name *"
-          value={form.name}
-          onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-          style={{ padding: 8, borderRadius: 8, border: '1px solid #cbd5e1' }}
-        />
-        <input
-          placeholder="URL slug (optional, e.g. medplus)"
-          value={form.slug}
-          onChange={(e) => setForm((f) => ({ ...f, slug: e.target.value }))}
-          style={{ padding: 8, borderRadius: 8, border: '1px solid #cbd5e1' }}
-        />
-        <input
-          placeholder="Owner email *"
-          value={form.email}
-          onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))}
-          style={{ padding: 8, borderRadius: 8, border: '1px solid #cbd5e1' }}
-        />
-        <input
-          placeholder={isEdit ? 'New password (leave blank to keep)' : 'Owner password *'}
-          type="password"
-          value={form.password}
-          onChange={(e) => setForm((f) => ({ ...f, password: e.target.value }))}
-          style={{ padding: 8, borderRadius: 8, border: '1px solid #cbd5e1' }}
-        />
-        <input
-          placeholder="Phone *"
-          value={form.phone}
-          onChange={(e) => setForm((f) => ({ ...f, phone: e.target.value }))}
-          style={{ padding: 8, borderRadius: 8, border: '1px solid #cbd5e1' }}
-        />
-        <input
-          placeholder="Shop address line (for patient km distance)"
-          value={form.addressLine1}
-          onChange={(e) => setForm((f) => ({ ...f, addressLine1: e.target.value }))}
-          style={{ padding: 8, borderRadius: 8, border: '1px solid #cbd5e1' }}
-        />
-        <input
-          placeholder="City (e.g. Gurgaon, Faridabad)"
-          value={form.addressCity}
-          onChange={(e) => setForm((f) => ({ ...f, addressCity: e.target.value }))}
-          style={{ padding: 8, borderRadius: 8, border: '1px solid #cbd5e1' }}
-        />
-        <input
-          placeholder="Pincode"
-          value={form.addressPincode}
-          onChange={(e) => setForm((f) => ({ ...f, addressPincode: e.target.value }))}
-          style={{ padding: 8, borderRadius: 8, border: '1px solid #cbd5e1' }}
-        />
-        <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13 }}>
-          <input
-            type="checkbox"
-            checked={form.statusActive}
-            onChange={(e) => setForm((f) => ({ ...f, statusActive: e.target.checked }))}
-          />
-          Active account
-        </label>
-        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-          <button
-            type="button"
-            className="public-cta"
-            disabled={saving}
-            onClick={() => void handleSaveForm()}
+      <div className="super-admin-modal-backdrop" role="presentation" onClick={close}>
+        <div
+          className="super-admin-modal"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="sa-tenant-form-title"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="super-admin-modal-header">
+            <p className="dashboard-kicker" id="sa-tenant-form-title">
+              {editTarget ? `Edit ${kind} — ${editTarget.name}` : `Add new ${kind}`}
+            </p>
+            <button type="button" className="super-admin-modal-close" onClick={close} disabled={saving} aria-label="Close">
+              ×
+            </button>
+          </div>
+
+          <form
+            id="sa-tenant-form"
+            className="super-admin-modal-body"
+            onSubmit={(e) => {
+              e.preventDefault()
+              void handleSaveForm()
+            }}
           >
-            {saving ? 'Saving…' : isEdit ? 'Save changes' : 'Create tenant'}
-          </button>
-          <button type="button" className="public-cta-secondary" onClick={resetFormState}>
-            Cancel
-          </button>
+            <div className="super-admin-modal-grid">
+              <TextField id="sa-tenant-name" label="Business name *" autoFocus {...field('name')} />
+              <TextField id="sa-tenant-slug" label="URL slug (optional)" placeholder="e.g. medplus" {...field('slug')} />
+              <TextField id="sa-tenant-email" label="Owner email *" type="email" {...field('email')} />
+              <TextField id="sa-tenant-phone" label="Phone *" type="tel" {...field('phone')} />
+              <TextField
+                id="sa-tenant-password"
+                label={isEdit ? 'New password' : 'Owner password *'}
+                hint={isEdit ? 'Leave blank to keep the current password.' : undefined}
+                type="password"
+                autoComplete="new-password"
+                canTogglePassword
+                {...field('password')}
+              />
+            </div>
+
+            <p className="dashboard-kicker" style={{ margin: 0 }}>Shop location</p>
+            <div className="super-admin-modal-grid">
+              <TextField id="sa-tenant-line1" label="Shop address line" {...field('addressLine1')} />
+              <TextField id="sa-tenant-city" label="City" placeholder="e.g. Gurgaon, Faridabad" {...field('addressCity')} />
+              <TextField id="sa-tenant-pincode" label="Pincode" inputMode="numeric" {...field('addressPincode')} />
+            </div>
+            <TextField
+              id="sa-tenant-map-url"
+              label="Google Maps link or coordinates (for exact location)"
+              placeholder="https://maps.app.goo.gl/...  or  28.4089, 77.3178"
+              hint="Google Maps → open the shop → Share → Copy link. Or right-click / long-press the shop's pin and copy the coordinates. When set, patients' km distance uses this exact pin instead of the address."
+              {...field('mapUrl')}
+            />
+            <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 10 }}>
+              <button
+                type="button"
+                className="ui-button ui-button-secondary ui-button-sm"
+                onClick={handleLocateMe}
+                disabled={saving || locating}
+              >
+                {locating ? 'Finding location…' : 'Locate me'}
+              </button>
+              <small style={{ color: 'var(--text-muted)' }}>
+                Use only while standing at the shop — it uses this device’s location.
+              </small>
+            </div>
+            {locateInfo && locateInfo.value === form.mapUrl && (
+              <p
+                role="status"
+                style={{
+                  margin: 0,
+                  fontSize: 13,
+                  color: locateInfo.accuracy > LOW_ACCURACY_METERS ? '#b45309' : '#166534',
+                }}
+              >
+                {locateInfo.accuracy > LOW_ACCURACY_METERS
+                  ? `Low accuracy (${describeAccuracy(locateInfo.accuracy)}). This device is probably not using GPS, so the pin may be far from the shop. Use a phone at the shop, or paste the shop’s coordinates from Google Maps.`
+                  : `Location found (${describeAccuracy(locateInfo.accuracy)}). Check the pin, then save.`}
+              </p>
+            )}
+            {mapCheckHref(form.mapUrl) && (
+              <a href={mapCheckHref(form.mapUrl) ?? undefined} target="_blank" rel="noopener noreferrer" style={{ fontSize: 13 }}>
+                Check this location on Google Maps
+              </a>
+            )}
+
+            <label className="super-admin-modal-check">
+              <input
+                type="checkbox"
+                checked={form.statusActive}
+                disabled={saving}
+                onChange={(e) => setForm((f) => ({ ...f, statusActive: e.target.checked }))}
+              />
+              Active account
+            </label>
+          </form>
+
+          <div className="super-admin-modal-footer">
+            <button type="submit" form="sa-tenant-form" className="public-cta" disabled={saving}>
+              {saving ? 'Saving…' : isEdit ? 'Save changes' : `Create ${kind}`}
+            </button>
+            <button type="button" className="public-cta-secondary" onClick={close} disabled={saving}>
+              Cancel
+            </button>
+          </div>
         </div>
       </div>
     )
@@ -637,14 +750,6 @@ export const SuperAdminDashboard = () => {
     <AppLayout
       showSidebar
       header={<Header clinicName="Super Admin Dashboard" doctorName={name} />}
-      breadcrumb={(
-        <Breadcrumb
-          items={[
-            { label: 'Home', href: '/' },
-            { label: 'Super Admin' },
-          ]}
-        />
-      )}
     >
       <main className="dashboard-main super-admin-dashboard-main">
         <section className="super-admin-dashboard-section">
@@ -738,8 +843,6 @@ export const SuperAdminDashboard = () => {
                 )}
               </div>
 
-              {showForm && canAddPartner && renderPartnerForm()}
-
               <div className="super-admin-panel-body">
                 {loading || geocoding ? (
                   <div className="super-admin-skeleton-stack" aria-busy="true" aria-label="Loading records">
@@ -754,6 +857,7 @@ export const SuperAdminDashboard = () => {
           )}
         </section>
       </main>
+      {showForm && canAddPartner && renderPartnerForm()}
       {editingDoctorId && (
         <SuperAdminDoctorEditor
           doctorId={editingDoctorId}

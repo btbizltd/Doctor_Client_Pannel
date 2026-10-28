@@ -15,6 +15,8 @@ export interface ITenant extends Omit<Document, "_id"> {
     city?: string;
     state?: string;
     pincode?: string;
+    /** Google Maps link set by super admin; when present the shop's map pin comes from it. */
+    mapUrl?: string;
   };
   whatsappNumber?: string;
   subscription: {
@@ -45,6 +47,7 @@ const TenantSchema = new Schema<ITenant>(
       city: String,
       state: String,
       pincode: String,
+      mapUrl: String,
     },
     whatsappNumber: { type: String },
     subscription: {

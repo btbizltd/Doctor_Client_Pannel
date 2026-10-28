@@ -2,7 +2,6 @@ import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import { io } from 'socket.io-client'
 import { Header } from '../components/Header'
 import { AppLayout } from '../components/layout/AppLayout'
-import { Breadcrumb } from '../components/ui/Breadcrumb'
 import { EmptyState } from '../components/ui/EmptyState'
 import { CalendarIcon, DocumentIcon, UserIcon } from '../components/ui/icons'
 import { authStorage } from '../utils/authStorage'
@@ -1186,14 +1185,6 @@ export const AssistantDashboard = () => {
       <AppLayout
         showSidebar
         header={<Header clinicName="Check‑in desk" doctorName={name} />}
-        breadcrumb={(
-          <Breadcrumb
-            items={[
-              { label: 'Home', href: '/' },
-              { label: 'Assistant Desk' },
-            ]}
-          />
-        )}
       >
         <main className="search-main assistant-desk-main">
         <section className="assistant-desk-section">

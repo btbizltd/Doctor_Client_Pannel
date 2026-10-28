@@ -4,8 +4,10 @@ import { Doctor, type DoctorRole } from "../models/Doctor";
 import { Tenant, type TenantType } from "../models/Tenant";
 import {
   buildProviderLocationQuery,
+  formatTenantAddress,
   geocodeAddressWithFallbacks,
 } from "./geocodeService";
+import { resolveGoogleMapsLocation } from "../utils/googleMapsLink";
 
 export interface CreatePartnerTenantPayload {
   tenantType: "PHARMACY" | "LAB";
@@ -19,8 +21,11 @@ export interface CreatePartnerTenantPayload {
     city?: string;
     state?: string;
     pincode?: string;
+    mapUrl?: string;
   };
 }
+
+const cleanMapUrl = (value: unknown): string => (typeof value === "string" ? value.trim() : "");
 
 const normalizeIndianPhone = (raw: string): string => {
   const digits = raw.replace(/\D/g, "");
@@ -66,6 +71,9 @@ export const createPartnerTenant = async (
     throw new Error("EMAIL_ALREADY_EXISTS");
   }
 
+  const mapUrl = cleanMapUrl(address?.mapUrl);
+  const linkPin = mapUrl ? await resolveGoogleMapsLocation(mapUrl) : null;
+
   const tenantId = buildTenantId(tenantType, slug);
   const passwordHash = await bcrypt.hash(password, 10);
   const role = roleForTenantType(tenantType);
@@ -76,7 +84,11 @@ export const createPartnerTenant = async (
     let clinicLatitude: number | undefined;
     let clinicLongitude: number | undefined;
     let clinicAddress: string | undefined;
-    if (locationQuery) {
+    if (linkPin) {
+      clinicLatitude = linkPin.lat;
+      clinicLongitude = linkPin.lng;
+      clinicAddress = formatTenantAddress(address) ?? name.trim();
+    } else if (locationQuery) {
       const coords = await geocodeAddressWithFallbacks(locationQuery, name.trim());
       if (coords) {
         clinicLatitude = coords.lat;
@@ -107,7 +119,7 @@ export const createPartnerTenant = async (
       slug,
       ownerUserId: ownerId,
       phone: normalizedPhone,
-      address,
+      address: address ? { ...address, mapUrl: mapUrl || undefined } : undefined,
       subscription: { plan: "FREE", status: "ACTIVE" },
       status: "ACTIVE",
     });
@@ -124,6 +136,8 @@ export const createPartnerTenant = async (
   }
 };
 
+type TenantAddress = NonNullable<CreatePartnerTenantPayload["address"]>;
+
 export interface ITenantResponse {
   id: string;
   tenantType: TenantType;
@@ -131,9 +145,12 @@ export interface ITenantResponse {
   slug: string;
   status: string;
   phone?: string;
+  address?: TenantAddress;
   ownerUserId?: string;
   ownerEmail?: string;
   ownerName?: string;
+  /** True when the owner account has a map pin (patients see km distance). */
+  locationSet?: boolean;
   createdAt: string;
 }
 
@@ -144,6 +161,7 @@ const toTenantResponse = (t: {
   slug: string;
   status: string;
   phone?: string;
+  address?: TenantAddress;
   ownerUserId?: string;
   createdAt?: Date;
 }): ITenantResponse => ({
@@ -153,9 +171,18 @@ const toTenantResponse = (t: {
   slug: t.slug,
   status: t.status,
   phone: t.phone,
+  address: t.address,
   ownerUserId: t.ownerUserId,
   createdAt: t.createdAt?.toISOString() ?? new Date().toISOString(),
 });
+
+const hasMapPin = (doc?: { clinicLatitude?: number; clinicLongitude?: number } | null): boolean =>
+  typeof doc?.clinicLatitude === "number" && typeof doc?.clinicLongitude === "number";
+
+const addressKey = (addr?: TenantAddress): string =>
+  [addr?.line1, addr?.city, addr?.state, addr?.pincode]
+    .map((p) => (typeof p === "string" ? p.trim().replace(/\s+/g, " ").toLowerCase() : ""))
+    .join("|");
 
 export interface UpdatePartnerTenantPayload {
   name?: string;
@@ -169,6 +196,7 @@ export interface UpdatePartnerTenantPayload {
     city?: string;
     state?: string;
     pincode?: string;
+    mapUrl?: string;
   };
 }
 
@@ -196,14 +224,50 @@ export const updatePartnerTenant = async (
   if (payload.status) {
     updates.status = payload.status;
   }
+  const mapUrl = cleanMapUrl(payload.address?.mapUrl);
   if (payload.address) {
-    updates.address = payload.address;
+    updates.address = { ...payload.address, mapUrl: mapUrl || undefined };
   }
 
   let normalizedPhone: string | undefined;
   if (payload.phone?.trim()) {
     normalizedPhone = normalizeIndianPhone(payload.phone);
     updates.phone = normalizedPhone;
+  }
+
+  // Re-pin only when the location input really changed (or the owner has no pin yet), so a saved location stays
+  // put across unrelated edits. A Google Maps link, when given, is the pin source; otherwise the address is
+  // geocoded. Resolve before any write: a location that cannot be found must not half-save.
+  let ownerLocation: { clinicLatitude?: number; clinicLongitude?: number; clinicAddress?: string } | undefined;
+  if (payload.address && tenant.ownerUserId) {
+    const owner = await Doctor.findById(tenant.ownerUserId).select("clinicLatitude clinicLongitude").lean();
+    const addressChanged = addressKey(payload.address) !== addressKey(tenant.address ?? undefined);
+    const mapUrlChanged = mapUrl !== cleanMapUrl(tenant.address?.mapUrl);
+    const displayName =
+      (typeof updates.name === "string" ? updates.name : tenant.name) || tenant.name;
+    if (mapUrl && (mapUrlChanged || !hasMapPin(owner))) {
+      const pin = await resolveGoogleMapsLocation(mapUrl);
+      ownerLocation = {
+        clinicLatitude: pin.lat,
+        clinicLongitude: pin.lng,
+        clinicAddress: formatTenantAddress(payload.address) ?? displayName,
+      };
+    } else if (mapUrl && addressChanged) {
+      ownerLocation = { clinicAddress: formatTenantAddress(payload.address) ?? displayName };
+    } else if (!mapUrl && (addressChanged || !hasMapPin(owner))) {
+      const locationQuery = buildProviderLocationQuery(payload.address, undefined, displayName);
+      const coords = locationQuery
+        ? await geocodeAddressWithFallbacks(locationQuery, displayName)
+        : null;
+      if (!locationQuery || !coords) {
+        throw new Error("LOCATION_NOT_FOUND");
+      }
+      ownerLocation = {
+        clinicLatitude: coords.lat,
+        clinicLongitude: coords.lng,
+        clinicAddress: locationQuery.replace(/, India$/i, ""),
+      };
+    }
   }
 
   if (tenant.ownerUserId) {
@@ -231,28 +295,11 @@ export const updatePartnerTenant = async (
     if (payload.status) {
       ownerUpdates.status = payload.status === "ACTIVE";
     }
+    if (ownerLocation) {
+      Object.assign(ownerUpdates, ownerLocation);
+    }
     if (Object.keys(ownerUpdates).length > 0) {
       await Doctor.findByIdAndUpdate(tenant.ownerUserId, ownerUpdates);
-    }
-
-    if (payload.address && tenant.ownerUserId) {
-      const displayName =
-        (typeof updates.name === "string" ? updates.name : tenant.name) || tenant.name;
-      const locationQuery = buildProviderLocationQuery(
-        payload.address,
-        undefined,
-        displayName
-      );
-      if (locationQuery) {
-        const coords = await geocodeAddressWithFallbacks(locationQuery, displayName);
-        if (coords) {
-          await Doctor.findByIdAndUpdate(tenant.ownerUserId, {
-            clinicLatitude: coords.lat,
-            clinicLongitude: coords.lng,
-            clinicAddress: locationQuery.replace(/, India$/i, ""),
-          });
-        }
-      }
     }
   }
 
@@ -359,7 +406,7 @@ export const listTenants = async (
   const owners =
     ownerIds.length > 0
       ? await Doctor.find({ _id: { $in: ownerIds } })
-          .select("name email")
+          .select("name email clinicLatitude clinicLongitude")
           .lean()
       : [];
 
@@ -371,6 +418,7 @@ export const listTenants = async (
       ...toTenantResponse(t as Parameters<typeof toTenantResponse>[0]),
       ownerEmail: owner?.email,
       ownerName: owner?.name,
+      locationSet: hasMapPin(owner),
     };
   });
 };

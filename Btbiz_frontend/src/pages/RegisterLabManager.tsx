@@ -136,7 +136,7 @@ export const RegisterLabManager = () => {
               <button
                 type="button"
                 className="login-link"
-                onClick={() => navigate('/login')}
+                onClick={() => navigate('/login?role=lab-manager')}
               >
                 Back to login
               </button>

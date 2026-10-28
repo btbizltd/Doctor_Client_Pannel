@@ -236,7 +236,8 @@ router.get("/assistant/doctor-today", async (req, res) => {
 
     const visits = await Visit.find({
       doctor: { $in: doctorIds },
-      visitDate: { $gte: startOfDay, $lte: endOfDay }
+      visitDate: { $gte: startOfDay, $lte: endOfDay },
+      assistantCheckedInAt: { $exists: false }
     })
       .sort({ visitDate: 1 })
       .populate("patient", "firstName lastName mobileNumber address")
@@ -369,7 +370,11 @@ router.get("/assistant/patient-prefill", async (req, res) => {
       return;
     }
 
-    const candidates = await findPatientsByMobile(mobile);
+    // An explicit pick (e.g. from an appointment card) may be a since-removed family member,
+    // so it is validated against every profile on the number; the picker list only shows current members.
+    const candidates = await findPatientsByMobile(mobile, {
+      excludeRemovedFamilyMembers: !selectedPatientId
+    });
     if (!candidates.length) {
       res.status(404).json({ message: "Patient not found" });
       return;

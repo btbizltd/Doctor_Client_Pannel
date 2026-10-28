@@ -28,6 +28,7 @@ import {
   updatePartnerTenant,
 } from "../services/tenantService";
 import { geocodeAllPartnersMissingCoords } from "../services/providerLocationService";
+import { MapLinkError } from "../utils/googleMapsLink";
 import {
   getIntelligenceSummary,
   IntelligencePeriod,
@@ -378,6 +379,10 @@ router.post("/tenants", async (req, res) => {
       res.status(409).json({ message: "Email or phone already registered" });
       return;
     }
+    if (error instanceof MapLinkError) {
+      res.status(422).json({ message: `${error.message} Nothing was saved.`, code: "MAP_LINK_INVALID" });
+      return;
+    }
     // eslint-disable-next-line no-console
     console.error("super-admin/tenants POST error:", error);
     res.status(500).json({ message: "Internal server error" });
@@ -424,6 +429,18 @@ router.patch("/tenants/:id", async (req, res) => {
     }
     if (error?.message === "EMAIL_ALREADY_EXISTS") {
       res.status(409).json({ message: "Email or phone already registered" });
+      return;
+    }
+    if (error?.message === "LOCATION_NOT_FOUND") {
+      res.status(422).json({
+        message:
+          "Could not find this address on the map. Check the address line, city and pincode, then save again. Nothing was changed.",
+        code: "LOCATION_NOT_FOUND",
+      });
+      return;
+    }
+    if (error instanceof MapLinkError) {
+      res.status(422).json({ message: `${error.message} Nothing was changed.`, code: "MAP_LINK_INVALID" });
       return;
     }
     // eslint-disable-next-line no-console

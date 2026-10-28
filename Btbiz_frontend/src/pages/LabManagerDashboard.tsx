@@ -2,9 +2,7 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Header } from '../components/Header'
 import { AppLayout } from '../components/layout/AppLayout'
-import { ClinicLocationSetup } from '../components/ClinicLocationSetup'
 import { authStorage } from '../utils/authStorage'
-import { Breadcrumb } from '../components/ui/Breadcrumb'
 import { Button } from '../components/ui/Button'
 import { Card } from '../components/ui/Card'
 import { DataTable } from '../components/ui/DataTable'
@@ -106,22 +104,7 @@ export const LabManagerDashboard = () => {
     <>
       <AppLayout
         showSidebar
-        header={(
-          <>
-            <Header doctorName={name} />
-            <div className="staff-clinic-setup-bar">
-              <ClinicLocationSetup />
-            </div>
-          </>
-        )}
-        breadcrumb={(
-          <Breadcrumb
-            items={[
-              { label: 'Home', href: '/' },
-              { label: 'Lab Assistants' },
-            ]}
-          />
-        )}
+        header={<Header doctorName={name} />}
       >
         <main className="dashboard-main lab-manager-dashboard-main">
           <section className="lab-manager-dashboard-section">

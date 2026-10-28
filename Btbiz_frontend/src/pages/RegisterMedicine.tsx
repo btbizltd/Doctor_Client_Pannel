@@ -136,7 +136,7 @@ export const RegisterMedicine = () => {
               <button
                 type="button"
                 className="login-link"
-                onClick={() => navigate('/login')}
+                onClick={() => navigate('/login?role=pharmacy')}
               >
                 Back to login
               </button>

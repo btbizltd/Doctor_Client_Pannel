@@ -102,7 +102,7 @@ export const searchPatientByMobile = async (
       return;
     }
 
-    const patients = await findPatientsByMobile(mobile);
+    const patients = await findPatientsByMobile(mobile, { excludeRemovedFamilyMembers: true });
     if (!patients || patients.length === 0) {
       res.status(404).json({ message: "Patient not found" });
       return;
@@ -252,6 +252,7 @@ export const createVisit = async (
       patientId,
       doctorId: doctorId!,
       recordedById: req.doctor?._id?.toString(),
+      assistantCheckedInAt: req.doctor?.role === "ASSISTANT" ? new Date() : undefined,
       reason: body.reason,
       notes: body.notes,
       bloodPressureSystolic: body.bloodPressureSystolic,
@@ -848,10 +849,13 @@ export const getPrescriptionSecureLink = async (
       return;
     }
 
+    // Labs/pharmacies are separate tenants from the clinic that uploaded the prescription; they already
+    // see it through full-history (also tenant-agnostic), so the preview lookup must match.
     const doc = await PatientDocument.findOne({
       _id: documentId,
       patient: patientId
     })
+      .setOptions({ skipTenant: true })
       .select("_id patient patientPublishStatus")
       .lean();
     if (!doc) {
@@ -942,6 +946,7 @@ export const getPrescriptionSecurePreview = async (
       _id: decoded.documentId,
       patient: decoded.patientId
     })
+      .setOptions({ skipTenant: true })
       .select(
         "_id originalName mimeType createdAt ocrText ocrConfidence patientPublishStatus verifiedExtract"
       )
