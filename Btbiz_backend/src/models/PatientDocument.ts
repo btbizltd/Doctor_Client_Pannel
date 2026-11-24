@@ -33,6 +33,10 @@ export interface IPatientDocument extends Document {
   };
   verifiedAt?: Date;
   verifiedBy?: Types.ObjectId;
+  /** Gemini reading of the file, cached so the verify form does not call the AI again. */
+  aiExtract?: Record<string, unknown>;
+  aiExtractModel?: string;
+  aiExtractedAt?: Date;
   createdAt: Date;
 }
 
@@ -63,7 +67,10 @@ const PatientDocumentSchema = new Schema<IPatientDocument>(
     },
     verifiedExtract: { type: Schema.Types.Mixed },
     verifiedAt: { type: Date },
-    verifiedBy: { type: Schema.Types.ObjectId, ref: "Doctor" }
+    verifiedBy: { type: Schema.Types.ObjectId, ref: "Doctor" },
+    aiExtract: { type: Schema.Types.Mixed },
+    aiExtractModel: { type: String },
+    aiExtractedAt: { type: Date }
   },
   { timestamps: { createdAt: true, updatedAt: false } }
 );

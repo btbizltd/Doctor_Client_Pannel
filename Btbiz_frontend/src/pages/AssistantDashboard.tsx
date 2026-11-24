@@ -26,6 +26,8 @@ import {
   type AssistantPatientPrefill,
   type AssistantPendingDocumentItem,
   type HospitalDoctorOption,
+  type PrescriptionAiConfidence,
+  type PrescriptionAiExtract,
 } from '../services/api'
 import { toast } from 'react-toastify'
 import { parseAssistantReferralError } from '../utils/assistantErrors'
@@ -38,9 +40,98 @@ type VerifyMedicineRow = {
   dosage: string
   quantity: string
   notes: string
+  confidence?: PrescriptionAiConfidence
+  writtenAs?: string
 }
 
-type VerifyTestRow = { id: string; testName: string; notes: string }
+type VerifyTestRow = {
+  id: string
+  testName: string
+  notes: string
+  confidence?: PrescriptionAiConfidence
+  writtenAs?: string
+}
+
+type VerifyAiState =
+  | { status: 'idle' }
+  | { status: 'loading' }
+  | { status: 'done'; extract: PrescriptionAiExtract; model?: string; applied: boolean }
+  | { status: 'unavailable' }
+  | { status: 'error'; message: string }
+
+const AI_ROW_BG: Record<PrescriptionAiConfidence, string> = {
+  HIGH: 'transparent',
+  MEDIUM: '#fef9c3',
+  LOW: '#fee2e2',
+}
+
+const AI_BADGE_STYLE: Record<PrescriptionAiConfidence, { background: string; color: string }> = {
+  HIGH: { background: '#dcfce7', color: '#166534' },
+  MEDIUM: { background: '#fef08a', color: '#854d0e' },
+  LOW: { background: '#fecaca', color: '#991b1b' },
+}
+
+const squashForCompare = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '')
+
+function buildVerifyRowsFromAi(extract: PrescriptionAiExtract): {
+  medicines: VerifyMedicineRow[]
+  tests: VerifyTestRow[]
+  clinicalNotes: string
+} {
+  const medicines = (extract.medicines ?? [])
+    .filter((m) => m.medicineName?.trim())
+    .map((m) => {
+      const name = m.medicineName.trim()
+      const strength = m.strength?.trim()
+      const withStrength =
+        strength && !squashForCompare(name).includes(squashForCompare(strength)) ? `${name} ${strength}` : name
+      return {
+        id: newVerifyRowId(),
+        medicineName: withStrength,
+        dosage: m.dosage?.trim() ?? '',
+        quantity: m.quantity?.trim() ?? '',
+        notes: [m.duration, m.instructions].map((v) => v?.trim()).filter(Boolean).join(' · '),
+        confidence: m.confidence,
+        writtenAs: m.writtenAs?.trim() || undefined,
+      }
+    })
+  const tests = (extract.tests ?? [])
+    .filter((t) => t.testName?.trim())
+    .map((t) => ({
+      id: newVerifyRowId(),
+      testName: t.testName.trim(),
+      notes: '',
+      confidence: t.confidence,
+      writtenAs: t.writtenAs?.trim() || undefined,
+    }))
+  const clinicalNotes = [
+    extract.diagnosis?.trim() ? `Diagnosis: ${extract.diagnosis.trim()}` : '',
+    extract.advice?.trim() ? `Advice: ${extract.advice.trim()}` : '',
+  ]
+    .filter(Boolean)
+    .join('\n')
+  return { medicines, tests, clinicalNotes }
+}
+
+function AiRowHint({ confidence, writtenAs }: { confidence?: PrescriptionAiConfidence; writtenAs?: string }) {
+  if (!confidence) return null
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginTop: 4, fontSize: 11 }}>
+      <span
+        style={{
+          ...AI_BADGE_STYLE[confidence],
+          padding: '1px 6px',
+          borderRadius: 999,
+          fontWeight: 700,
+          letterSpacing: 0.3,
+        }}
+      >
+        AI {confidence}
+      </span>
+      {writtenAs && <span style={{ color: '#64748b' }}>Written: {writtenAs}</span>}
+    </div>
+  )
+}
 
 type Step = 'search' | 'new_patient' | 'checkin'
 type AvailabilityStatus = 'available' | 'unavailable' | 'busy'
@@ -161,6 +252,10 @@ export const AssistantDashboard = () => {
   ])
   const [verifyClinicalNotes, setVerifyClinicalNotes] = useState('')
   const [verifyImportantNotes, setVerifyImportantNotes] = useState('')
+  const [verifyAi, setVerifyAi] = useState<VerifyAiState>({ status: 'idle' })
+  /** Set once the assistant edits the form, so a late AI result never overwrites their work. */
+  const verifyFormTouchedRef = useRef(false)
+  const verifyAiRequestKeyRef = useRef<string | null>(null)
 
   const [pendingDocs, setPendingDocs] = useState<AssistantPendingDocumentItem[]>([])
   const [pendingDocsLoading, setPendingDocsLoading] = useState(false)
@@ -731,6 +826,79 @@ export const AssistantDashboard = () => {
     setVerifyTests(t.length > 0 ? t : [{ id: newVerifyRowId(), testName: '', notes: '' }])
     setVerifyClinicalNotes('')
     setVerifyImportantNotes('')
+    verifyFormTouchedRef.current = false
+  }
+
+  const applyAiExtractToVerifyForm = (extract: PrescriptionAiExtract) => {
+    const { medicines, tests, clinicalNotes } = buildVerifyRowsFromAi(extract)
+    setVerifyMedicines(
+      medicines.length > 0
+        ? medicines
+        : [{ id: newVerifyRowId(), medicineName: '', dosage: '', quantity: '', notes: '' }]
+    )
+    setVerifyTests(tests.length > 0 ? tests : [{ id: newVerifyRowId(), testName: '', notes: '' }])
+    setVerifyClinicalNotes(clinicalNotes)
+    setVerifyImportantNotes(extract.unreadableNotes?.trim() ? `Unclear on prescription: ${extract.unreadableNotes.trim()}` : '')
+    verifyFormTouchedRef.current = false
+    setVerifyAi((s) => (s.status === 'done' ? { ...s, applied: true } : s))
+  }
+
+  const pendingDocsRef = useRef<AssistantPendingDocumentItem[]>([])
+  pendingDocsRef.current = pendingDocs
+
+  const runVerifyAiExtract = useCallback(
+    async (forPatientId: string, documentId: string, force: boolean) => {
+      const key = `${forPatientId}:${documentId}`
+      verifyAiRequestKeyRef.current = key
+      setVerifyAi({ status: 'loading' })
+      try {
+        const res = await patientService.aiExtractDocument(forPatientId, documentId, force)
+        if (verifyAiRequestKeyRef.current !== key) return
+        const autoApply = !verifyFormTouchedRef.current
+        setVerifyAi({ status: 'done', extract: res.aiExtract, model: res.model, applied: false })
+        if (autoApply) applyAiExtractToVerifyForm(res.aiExtract)
+      } catch (err: unknown) {
+        if (verifyAiRequestKeyRef.current !== key) return
+        const ax = err as { response?: { data?: { code?: string; message?: string } }; code?: string }
+        const code = ax?.response?.data?.code
+        if (code === 'AI_NOT_CONFIGURED' || code === 'AI_UNSUPPORTED_FILE') {
+          setVerifyAi({ status: 'unavailable' })
+          return
+        }
+        setVerifyAi({
+          status: 'error',
+          message:
+            ax?.code === 'ECONNABORTED'
+              ? 'AI took too long to read this prescription.'
+              : ax?.response?.data?.message ?? 'AI could not read this prescription.',
+        })
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    []
+  )
+
+  useEffect(() => {
+    if (!verifyModalOpen || !patientId || !docPendingReleaseId) {
+      verifyAiRequestKeyRef.current = null
+      setVerifyAi({ status: 'idle' })
+      return
+    }
+    const cached = pendingDocsRef.current.find(
+      (d) => d.documentId === docPendingReleaseId && d.patientId === patientId
+    )
+    if (cached?.aiExtract) {
+      verifyAiRequestKeyRef.current = `${patientId}:${docPendingReleaseId}`
+      setVerifyAi({ status: 'done', extract: cached.aiExtract, model: cached.aiExtractModel, applied: false })
+      applyAiExtractToVerifyForm(cached.aiExtract)
+      return
+    }
+    void runVerifyAiExtract(patientId, docPendingReleaseId, false)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [verifyModalOpen, patientId, docPendingReleaseId, runVerifyAiExtract])
+
+  const markVerifyFormTouched = () => {
+    verifyFormTouchedRef.current = true
   }
 
   const verifyPreviewFileNameHint = useMemo(() => {
@@ -880,6 +1048,7 @@ export const AssistantDashboard = () => {
   }
 
   const addVerifyMedicineRow = () => {
+    markVerifyFormTouched()
     setVerifyMedicines((rows) => [
       ...rows,
       { id: newVerifyRowId(), medicineName: '', dosage: '', quantity: '', notes: '' },
@@ -887,14 +1056,17 @@ export const AssistantDashboard = () => {
   }
 
   const removeVerifyMedicineRow = (id: string) => {
+    markVerifyFormTouched()
     setVerifyMedicines((rows) => (rows.length <= 1 ? rows : rows.filter((r) => r.id !== id)))
   }
 
   const addVerifyTestRow = () => {
+    markVerifyFormTouched()
     setVerifyTests((rows) => [...rows, { id: newVerifyRowId(), testName: '', notes: '' }])
   }
 
   const removeVerifyTestRow = (id: string) => {
+    markVerifyFormTouched()
     setVerifyTests((rows) => (rows.length <= 1 ? rows : rows.filter((r) => r.id !== id)))
   }
 
@@ -2327,11 +2499,135 @@ export const AssistantDashboard = () => {
                       )}
                   </div>
                 </aside>
-                <div style={{ flex: '2 1 380px', minWidth: 0 }}>
-              <p className="text-sm" style={{ margin: '0 0 16px', color: '#475569', lineHeight: 1.5 }}>
-                OCR suggested rows below — edit each line, add or remove rows, then save. Lab and pharmacy secure
-                preview will use this structured data.
+                <div style={{ flex: '2 1 380px', minWidth: 0 }} onInputCapture={markVerifyFormTouched}>
+              <p className="text-sm" style={{ margin: '0 0 12px', color: '#475569', lineHeight: 1.5 }}>
+                {verifyAi.status === 'done' && verifyAi.applied
+                  ? 'AI filled the rows below from the prescription — check every line against the original, fix anything wrong, then save.'
+                  : 'Suggested rows below — edit each line, add or remove rows, then save.'}{' '}
+                Lab and pharmacy secure preview will use this structured data.
               </p>
+
+              {verifyAi.status === 'loading' && (
+                <div
+                  className="text-sm"
+                  style={{
+                    marginBottom: 16,
+                    padding: '10px 12px',
+                    borderRadius: 8,
+                    background: '#eff6ff',
+                    border: '1px solid #bfdbfe',
+                    color: '#1e40af',
+                  }}
+                >
+                  Reading prescription with AI… rows will fill in automatically (usually 5–20 seconds). You can start
+                  editing meanwhile.
+                </div>
+              )}
+
+              {verifyAi.status === 'error' && (
+                <div
+                  className="text-sm"
+                  style={{
+                    marginBottom: 16,
+                    padding: '10px 12px',
+                    borderRadius: 8,
+                    background: '#fef2f2',
+                    border: '1px solid #fecaca',
+                    color: '#991b1b',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: 10,
+                    flexWrap: 'wrap',
+                  }}
+                >
+                  <span>{verifyAi.message} The OCR suggestions are kept — you can still fill the form manually.</span>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    onClick={() => patientId && docPendingReleaseId && void runVerifyAiExtract(patientId, docPendingReleaseId, true)}
+                  >
+                    Retry AI
+                  </Button>
+                </div>
+              )}
+
+              {verifyAi.status === 'done' && (() => {
+                const ex = verifyAi.extract
+                const all = [...(ex.medicines ?? []), ...(ex.tests ?? [])]
+                const count = (c: PrescriptionAiConfidence) => all.filter((x) => x.confidence === c).length
+                const meta = [
+                  ex.doctorName && `Doctor: ${ex.doctorName}`,
+                  ex.patientName && `Patient: ${ex.patientName}`,
+                  ex.prescriptionDate && `Date: ${ex.prescriptionDate}`,
+                ].filter(Boolean)
+                return (
+                  <div
+                    className="text-sm"
+                    style={{
+                      marginBottom: 16,
+                      padding: '10px 12px',
+                      borderRadius: 8,
+                      background: ex.isPrescription ? '#f0fdf4' : '#fffbeb',
+                      border: `1px solid ${ex.isPrescription ? '#bbf7d0' : '#fde68a'}`,
+                      color: '#0f172a',
+                      lineHeight: 1.5,
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                        <strong>AI read{verifyAi.model ? ` (${verifyAi.model})` : ''}:</strong>
+                        <span>{ex.medicines?.length ?? 0} medicines, {ex.tests?.length ?? 0} tests</span>
+                        {(['HIGH', 'MEDIUM', 'LOW'] as const).map((c) =>
+                          count(c) > 0 ? (
+                            <span
+                              key={c}
+                              style={{ ...AI_BADGE_STYLE[c], padding: '1px 8px', borderRadius: 999, fontSize: 11, fontWeight: 700 }}
+                            >
+                              {c} {count(c)}
+                            </span>
+                          ) : null
+                        )}
+                      </div>
+                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                        {!verifyAi.applied && (
+                          <Button type="button" onClick={() => applyAiExtractToVerifyForm(ex)}>
+                            Apply AI suggestions
+                          </Button>
+                        )}
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          onClick={() => {
+                            if (!patientId || !docPendingReleaseId) return
+                            void runVerifyAiExtract(patientId, docPendingReleaseId, true)
+                          }}
+                        >
+                          Re-read with AI
+                        </Button>
+                      </div>
+                    </div>
+                    {!verifyAi.applied && (
+                      <div style={{ marginTop: 6, color: '#92400e' }}>
+                        Your edits in the form were kept. Click &quot;Apply AI suggestions&quot; to replace the rows
+                        with this AI reading.
+                      </div>
+                    )}
+                    {!ex.isPrescription && (
+                      <div style={{ marginTop: 6, color: '#92400e', fontWeight: 600 }}>
+                        AI thinks this file may not be a prescription — please check carefully.
+                      </div>
+                    )}
+                    {meta.length > 0 && <div style={{ marginTop: 6, color: '#475569' }}>{meta.join(' · ')}</div>}
+                    {ex.unreadableNotes && (
+                      <div style={{ marginTop: 6, color: '#991b1b' }}>Unclear: {ex.unreadableNotes}</div>
+                    )}
+                    <div style={{ marginTop: 6, color: '#64748b', fontSize: 12 }}>
+                      Yellow rows = AI is not fully sure, red rows = please check carefully against the original.
+                    </div>
+                  </div>
+                )
+              })()}
 
               {docOcrPreview && (
                 <details style={{ marginBottom: 20, border: '1px solid #e2e8f0', borderRadius: 8, padding: 12 }}>
@@ -2376,7 +2672,7 @@ export const AssistantDashboard = () => {
                     </thead>
                     <tbody>
                       {verifyMedicines.map((row) => (
-                        <tr key={row.id}>
+                        <tr key={row.id} style={row.confidence ? { background: AI_ROW_BG[row.confidence] } : undefined}>
                           <td style={{ padding: 6, borderBottom: '1px solid #f1f5f9', verticalAlign: 'top' }}>
                             <TextField
                               id={`verify-med-name-${row.id}`}
@@ -2391,6 +2687,7 @@ export const AssistantDashboard = () => {
                               }
                               placeholder="e.g. Paracetamol 500mg"
                             />
+                            <AiRowHint confidence={row.confidence} writtenAs={row.writtenAs} />
                           </td>
                           <td style={{ padding: 6, borderBottom: '1px solid #f1f5f9', verticalAlign: 'top' }}>
                             <TextField
@@ -2463,7 +2760,7 @@ export const AssistantDashboard = () => {
                     </thead>
                     <tbody>
                       {verifyTests.map((row) => (
-                        <tr key={row.id}>
+                        <tr key={row.id} style={row.confidence ? { background: AI_ROW_BG[row.confidence] } : undefined}>
                           <td style={{ padding: 6, borderBottom: '1px solid #f1f5f9', verticalAlign: 'top' }}>
                             <TextField
                               id={`verify-test-name-${row.id}`}
@@ -2476,6 +2773,7 @@ export const AssistantDashboard = () => {
                               }
                               placeholder="e.g. CBC, LFT"
                             />
+                            <AiRowHint confidence={row.confidence} writtenAs={row.writtenAs} />
                           </td>
                           <td style={{ padding: 6, borderBottom: '1px solid #f1f5f9', verticalAlign: 'top' }}>
                             <TextField

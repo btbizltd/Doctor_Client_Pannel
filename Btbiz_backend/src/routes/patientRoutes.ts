@@ -21,7 +21,8 @@ import {
   uploadDiagnosticTestReport,
   uploadPatientDocument,
   verifyPatientDocumentForPatientProfile,
-  listPendingAssistantDocuments
+  listPendingAssistantDocuments,
+  aiExtractPatientDocument
 } from "../controllers/patientController";
 import { getUploadsRootDir } from "../utils/uploadPath";
 
@@ -67,6 +68,9 @@ router.patch(
   "/:patientId/documents/:documentId/verify-for-patient",
   verifyPatientDocumentForPatientProfile
 );
+
+// POST /patients/:patientId/documents/:documentId/ai-extract — Gemini prefill for the verify form
+router.post("/:patientId/documents/:documentId/ai-extract", aiExtractPatientDocument);
 
 // GET /patients/:patientId/documents/:documentId/file - serve document for doctor/assistant
 router.get("/:patientId/documents/:documentId/file", getDocumentFile);

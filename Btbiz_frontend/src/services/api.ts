@@ -1271,6 +1271,31 @@ export interface AssistantPendingDocumentItem {
     unknown: Array<{ text: string; confidence: 'HIGH' | 'MEDIUM' | 'LOW' }>
     lowConfidenceLines: string[]
   }
+  aiExtract?: PrescriptionAiExtract
+  aiExtractModel?: string
+}
+
+export type PrescriptionAiConfidence = 'HIGH' | 'MEDIUM' | 'LOW'
+
+export interface PrescriptionAiExtract {
+  isPrescription: boolean
+  doctorName?: string
+  patientName?: string
+  prescriptionDate?: string
+  diagnosis?: string
+  advice?: string
+  medicines: Array<{
+    medicineName: string
+    writtenAs?: string
+    strength?: string
+    dosage?: string
+    duration?: string
+    quantity?: string
+    instructions?: string
+    confidence: PrescriptionAiConfidence
+  }>
+  tests: Array<{ testName: string; writtenAs?: string; confidence: PrescriptionAiConfidence }>
+  unreadableNotes?: string
 }
 
 export const patientService = {
@@ -1659,6 +1684,20 @@ export const patientService = {
     }
   ): Promise<void> {
     await api.patch(`/patients/${patientId}/documents/${documentId}/verify-for-patient`, payload)
+  },
+
+  /** Throws with `response.data.code === 'AI_NOT_CONFIGURED'` when the server has no Gemini key. */
+  async aiExtractDocument(
+    patientId: string,
+    documentId: string,
+    force = false
+  ): Promise<{ aiExtract: PrescriptionAiExtract; model?: string; cached?: boolean }> {
+    const res = await api.post(
+      `/patients/${patientId}/documents/${documentId}/ai-extract`,
+      { force },
+      { timeout: 150000 }
+    )
+    return res.data as { aiExtract: PrescriptionAiExtract; model?: string; cached?: boolean }
   },
 
   async uploadDocument(

@@ -26,6 +26,12 @@ import {
   type VerifiedExtractPayload,
 } from "../utils/prescriptionOcrParse";
 import { sendEmailWithAttachment } from "../services/emailService";
+import {
+  GEMINI_SUPPORTED_MIME_TYPES,
+  extractPrescriptionWithGemini,
+  getGeminiModel,
+  isGeminiConfigured,
+} from "../services/geminiPrescriptionService";
 import { sendWhatsAppMessage } from "../services/whatsappService";
 import {
   addDiagnosticTestsToVisit,
@@ -696,6 +702,8 @@ export const listPendingAssistantDocuments = async (req: Request, res: Response)
           patientPublishStatus: "PENDING_ASSISTANT" as const,
           ocrText: ocrText || undefined,
           suggestedParse,
+          aiExtract: d.aiExtract ?? undefined,
+          aiExtractModel: d.aiExtractModel ?? undefined,
         },
       ];
     });
@@ -765,6 +773,76 @@ export const verifyPatientDocumentForPatientProfile = async (
     // eslint-disable-next-line no-console
     console.error("verifyPatientDocumentForPatientProfile error:", error);
     res.status(500).json({ message: "Internal server error" });
+  }
+};
+
+/**
+ * Reads a staff-uploaded prescription with Gemini to prefill the assistant verify form.
+ * Cached on the document; send { force: true } to read again.
+ */
+export const aiExtractPatientDocument = async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { patientId, documentId } = req.params;
+    const role = req.doctor?.role;
+    if (role !== "ASSISTANT" && role !== "DOCTOR") {
+      res.status(403).json({ message: "Only clinic staff can read prescriptions with AI" });
+      return;
+    }
+    if (!mongoose.isValidObjectId(patientId) || !mongoose.isValidObjectId(documentId)) {
+      res.status(400).json({ message: "Invalid patientId or documentId" });
+      return;
+    }
+
+    const doc = await PatientDocument.findOne({ _id: documentId, patient: patientId });
+    if (!doc) {
+      res.status(404).json({ message: "Document not found for this patient" });
+      return;
+    }
+
+    const force = Boolean((req.body as { force?: unknown } | undefined)?.force);
+    if ((doc as any).aiExtract && !force) {
+      res.status(200).json({
+        aiExtract: (doc as any).aiExtract,
+        model: (doc as any).aiExtractModel,
+        cached: true,
+      });
+      return;
+    }
+
+    if (!isGeminiConfigured()) {
+      res.status(503).json({ code: "AI_NOT_CONFIGURED", message: "AI prescription reading is not configured" });
+      return;
+    }
+    if (!GEMINI_SUPPORTED_MIME_TYPES.includes(doc.mimeType)) {
+      res.status(400).json({ code: "AI_UNSUPPORTED_FILE", message: "AI reading supports JPG, PNG, WEBP and PDF files" });
+      return;
+    }
+
+    let bytes: Buffer | null = (doc as any).fileData ? Buffer.from((doc as any).fileData) : null;
+    if (!bytes) {
+      const fullPath = findExistingUploadFilePath(doc.path);
+      if (uploadFileExists(fullPath)) bytes = await fs.promises.readFile(fullPath);
+    }
+    if (!bytes) {
+      res.status(404).json({ code: "DOCUMENT_FILE_MISSING", message: "Document file missing on server storage" });
+      return;
+    }
+
+    const aiExtract = await extractPrescriptionWithGemini(bytes, doc.mimeType);
+    const model = getGeminiModel();
+    (doc as any).aiExtract = aiExtract;
+    (doc as any).aiExtractModel = model;
+    (doc as any).aiExtractedAt = new Date();
+    await doc.save();
+
+    res.status(200).json({ aiExtract, model, cached: false });
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.error("aiExtractPatientDocument error:", error);
+    res.status(502).json({
+      code: "AI_EXTRACT_FAILED",
+      message: error instanceof Error ? error.message : "AI could not read this prescription",
+    });
   }
 };
 
